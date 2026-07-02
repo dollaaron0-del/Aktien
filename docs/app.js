@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '253';
+const APP_VERSION = '254';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -7822,8 +7822,26 @@ async function scanModuleStructure(btn) {
       method: 'POST',
       body: JSON.stringify({ structure: moduleStructure, topics: scannedTopics }),
     }).catch(() => {});
+    // Reconcile deckt nur Renames ab, bei denen ein NEUER Name die ID des alten Themas
+    // erbt. Ein Re-Scan, der Themen zusammenführt/neu zuschneidet, lässt bereits
+    // gelernten Fortschritt aber auf jetzt verwaiste IDs fallen (v217). Diesen Fall
+    // SOFORT heilen – nicht erst beim nächsten Fach-Öffnen (docs/app.js:1675) –, damit
+    // die Abhak-Zahl direkt nach dem Re-Scan stimmt. sim deckt bereits prev+new ab
+    // (⊇ Waisen + aktuelle Themen) → kein zweiter Embedding-Call nötig.
+    const repair = repairOrphanedProgress(sim);
+    if (repair.healed) {
+      localforage.setItem(`lt_${sessionId}`, learnedTopics).catch(() => {});
+      saveTopicMeta();
+      repair.added.forEach(t => api(`/api/subjects/${sessionId}/learned-topics`, {
+        method: 'POST', body: JSON.stringify({ topic: t }),
+      }).catch(() => {}));
+      repair.removed.forEach(t => api(`/api/subjects/${sessionId}/learned-topics/${encodeURIComponent(t)}`, {
+        method: 'DELETE',
+      }).catch(() => {}));
+    }
     renderMilestone();
     loadLernpfad();
+    if (repair.healed) setTimeout(() => toast(`✅ ${repair.healed} bereits gelernte${repair.healed === 1 ? 's Thema' : ' Themen'} wieder als erledigt verknüpft.`, 'success', 4500), 300);
     // Re-Scan: zusätzlich anzeigen, was sich gegenüber der alten Struktur geändert hat (#7).
     const diffNote = prevNames.length ? ` (${formatScanDiff(scanDiff(prevNames, newNames))})` : '';
     toast(`🗺️ ${hauptthemen.length} Hauptthemen · ${scannedTopics.length} Lernthemen erkannt!${diffNote}`, 'success');
