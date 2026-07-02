@@ -54,14 +54,14 @@ function extractConst(name) {
 
 const FN_DECLS = [
   'normTopic', 'jaccardTokens', 'parseNum', 'evalExpr', 'numEqual', 'numericCheck', 'applyNumericVerdict',
-  'newTopicUid', 'topicId', 'topicKey', 'resolveKey',
-  'dedupeTopicUids', 'reconcileTopicUids', 'ensureTopicUids', 'scanDiff', 'repairOrphanedProgress',
+  'newTopicUid', 'topicId', 'topicKey', 'resolveKey', 'topicMaxLevel',
+  'dedupeTopicUids', 'reconcileTopicUids', 'ensureTopicUids', 'scanDiff', 'repairOrphanedProgress', 'retainLearnedTopics',
   'scanDirectiveBlock', 'mergeCoverageAdditions',
   'md', 'renderTable',
   'inkBoundingBox', 'enhanceInkContrast', 'catmullRomPts',
   'repairJson', 'parseJsonLoose', 'parseJsonResponse', 'salvageTruncatedJson',
 ];
-const CONST_DECLS = ['isTopicUid', 'formatScanDiff', 'EMBED_MATCH_THRESHOLD', 'INK_CELL', 'INK_MIN_PIXELS', 'INK_WHITE_CUTOFF', 'INK_GAMMA', 'SPLINE_SEG'];
+const CONST_DECLS = ['isTopicUid', 'formatScanDiff', 'EMBED_MATCH_THRESHOLD', 'DIFF_IDX', 'diffIdx', 'INK_CELL', 'INK_MIN_PIXELS', 'INK_WHITE_CUTOFF', 'INK_GAMMA', 'SPLINE_SEG'];
 
 const assembled = [
   ...CONST_DECLS.map(extractConst),
@@ -74,13 +74,14 @@ const factory = new Function('self', 'katex', `
   let topicUids = {};
   let learnedTopics = [];
   let topicMeta = {};
+  let moduleStructure = null;
   let __path = [];
-  function pathTopics() { return __path; }
+  function pathTopics() { return moduleStructure?.kapitel?.length ? moduleStructure.kapitel.flatMap(k => k.themen) : __path; }
   ${assembled}
   return {
     normTopic, jaccardTokens, parseNum, evalExpr, numEqual, numericCheck, applyNumericVerdict, isTopicUid,
-    newTopicUid, topicId, topicKey, resolveKey,
-    dedupeTopicUids, reconcileTopicUids, ensureTopicUids, scanDiff, formatScanDiff, repairOrphanedProgress,
+    newTopicUid, topicId, topicKey, resolveKey, topicMaxLevel,
+    dedupeTopicUids, reconcileTopicUids, ensureTopicUids, scanDiff, formatScanDiff, repairOrphanedProgress, retainLearnedTopics,
     scanDirectiveBlock, mergeCoverageAdditions,
     md, renderTable,
     inkBoundingBox, enhanceInkContrast, catmullRomPts,
@@ -90,6 +91,8 @@ const factory = new Function('self', 'katex', `
     _setPath: p => { __path = p; },
     _setLearned: l => { learnedTopics = l; },
     _getLearned: () => learnedTopics,
+    _setStruct: s => { moduleStructure = s; },
+    _getStruct: () => moduleStructure,
     _setMeta: m => { topicMeta = m; },
     _getMeta: () => topicMeta,
   };
@@ -275,6 +278,40 @@ group('repairOrphanedProgress — semantisches Heilen + Score-Greedy (v216)', ()
   eq(r2.healed, 1, 'nur die stärkere Waise beansprucht das Ziel');
   ok(M._getLearned().includes('t_eee::mittel'), 'stärkere Waise (0.86) gewinnt das Ziel');
   ok(M._getLearned().includes('t_ddd::mittel'), 'schwächere Waise bleibt verwaist (kein Zweitbest-Merge)');
+});
+
+group('retainLearnedTopics — gelernte Themen überleben den Re-Scan (v255)', () => {
+  // sim: alte Namen ↔ neue Namen/Titel; Schwelle 0.75. PESTEL findet KEINE Entsprechung
+  // (0.5) → muss zurückgeholt werden; Marktanteil findet eine (0.9) → nicht doppeln.
+  const sim = (a, b) => {
+    const m = {
+      'pestel umfeldanalyse|situationsanalyse': 0.5,
+      'marktanteil|marktanteil analyse': 0.9,
+      'strategie|strategie': 1,
+    };
+    return m[`${a}|${b}`] ?? m[`${b}|${a}`] ?? 0.1;
+  };
+  M._setUids({ 'pestel umfeldanalyse': 't_aa1', 'marktanteil': 't_bb2', 'werbung': 't_cc3' });
+  M._setLearned(['t_aa1::mittel', 't_bb2::schwer']);   // Werbung wurde NIE gelernt
+  M._setMeta({});
+  const prev = { kapitel: [{ titel: 'Strategie', lernziel: 'Z', themen: ['PESTEL Umfeldanalyse', 'Marktanteil', 'Werbung'] }] };
+  M._setStruct({ kapitel: [{ titel: 'Strategie', themen: ['Situationsanalyse', 'Marktanteil Analyse'] }] });
+
+  const n = M.retainLearnedTopics(prev, sim);
+  eq(n, 1, 'nur das gelernte, entfallene PESTEL wird zurückgeholt');
+  const themen = M._getStruct().kapitel.flatMap(k => k.themen);
+  ok(themen.includes('PESTEL Umfeldanalyse'), 'PESTEL mit altem Anzeigenamen wieder in der Struktur');
+  ok(!themen.includes('Werbung'), 'nie gelerntes Thema wird NICHT zurückgeholt');
+  eq(themen.filter(t => M.normTopic(t) === 'marktanteil').length, 0, 'gematchtes Thema nicht doppelt (kein PESTEL-Klon)');
+  eq(M._getStruct().kapitel.find(k => k.titel === 'Strategie').themen.includes('PESTEL Umfeldanalyse'), true, 'ins best-passende (namensgleiche) Kapitel einsortiert');
+
+  // Kein passendes neues Kapitel → altes Kapitel wird neu angelegt (Fortschritt bleibt sichtbar).
+  M._setUids({ 'pestel umfeldanalyse': 't_aa1' });
+  M._setLearned(['t_aa1::mittel']);
+  M._setStruct({ kapitel: [{ titel: 'Ganz Anderes Kapitel', themen: ['Irgendwas'] }] });
+  const n2 = M.retainLearnedTopics({ kapitel: [{ titel: 'Strategie', lernziel: 'Z', themen: ['PESTEL Umfeldanalyse'] }] }, sim);
+  eq(n2, 1, 'auch ohne passendes Kapitel zurückgeholt');
+  ok(M._getStruct().kapitel.some(k => k.titel === 'Strategie' && k.themen.includes('PESTEL Umfeldanalyse')), 'altes Kapitel für das Waisen-Thema neu angelegt');
 });
 
 group('scanDirectiveBlock — destillierte Vorgaben als verbindlicher Scan-Block (v215)', () => {

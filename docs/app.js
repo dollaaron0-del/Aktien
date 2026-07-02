@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '254';
+const APP_VERSION = '255';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5648,6 +5648,53 @@ function repairOrphanedProgress(sim) {
   return result;
 }
 
+// "Nicht so streng" beim Re-Scan (v255): Ein frischer Scan schneidet die Themen neu zu und
+// lässt dabei manchmal welche GANZ fallen (echte Restrukturierung, nicht nur Umbenennung).
+// Ein bereits GELERNTES Thema, das im neuen Scan keine sichere Entsprechung mehr hat
+// (Ähnlichkeit < Schwelle), würde so samt Abhak-Status verschwinden – obwohl der Nutzer es
+// schon abgeschlossen hat. Statt es zu verlieren, hängen wir es – mit seinem ALTEN
+// Anzeigenamen – zurück in sein altes Kapitel (bzw. das best-passende neue). reconcileTopicUids
+// erbt danach die alte ID (Name identisch) → der Fortschritt bleibt sichtbar. Mutiert
+// moduleStructure und liefert die Zahl der zurückgeholten Themen. MUSS VOR reconcileTopicUids
+// laufen (nutzt daher noch die alten IDs für topicMaxLevel). sim: Embedding-Ähnlichkeit über
+// [...alteNamen, ...neueNamen]; die zurückgeholten Namen sind ⊂ alteNamen → schon eingebettet.
+function retainLearnedTopics(prevStructure, sim) {
+  if (!prevStructure?.kapitel?.length || !moduleStructure?.kapitel?.length) return 0;
+  const useEmb = typeof sim === 'function';
+  const threshold = useEmb ? EMBED_MATCH_THRESHOLD : 0.4;
+  const simOf = (a, b) => {
+    const na = normTopic(a), nb = normTopic(b);
+    if (na === nb) return 1;
+    if (useEmb) return sim(na, nb);
+    let s = jaccardTokens(na, nb);
+    if (na.includes(nb) || nb.includes(na)) s = Math.max(s, 0.75);
+    return s;
+  };
+  let retained = 0;
+  for (const oldK of prevStructure.kapitel) {
+    for (const t of (oldK.themen || [])) {
+      if (topicMaxLevel(t) < 0) continue;                                    // nie gelernt → darf wegfallen
+      const cur = moduleStructure.kapitel.flatMap(k => k.themen);
+      if (cur.some(nn => simOf(t, nn) >= threshold)) continue;              // (um)benannt bereits vorhanden
+      // Best-passendes neues Kapitel für die Einordnung – sonst das alte Kapitel neu anlegen.
+      let target = null, best = 0;
+      for (const k of moduleStructure.kapitel) {
+        const s = simOf(oldK.titel, k.titel);
+        if (s > best) { best = s; target = k; }
+      }
+      if (!target || best < (useEmb ? 0.6 : 0.4)) {
+        target = moduleStructure.kapitel.find(k => normTopic(k.titel) === normTopic(oldK.titel));
+        if (!target) {
+          target = { titel: oldK.titel, lernziel: oldK.lernziel || '', themen: [] };
+          moduleStructure.kapitel.push(target);
+        }
+      }
+      if (!target.themen.some(x => normTopic(x) === normTopic(t))) { target.themen.push(t); retained++; }
+    }
+  }
+  return retained;
+}
+
 // Re-Scan-Diff (#7-Bonus): zählt anhand der stabilen IDs, wie viele Themen neu sind,
 // verschwunden und erhalten geblieben. Ein Rename zählt als "unverändert", weil die ID
 // beim Reconcile erhalten bleibt (= Fortschritt bleibt). MUSS nach reconcileTopicUids
@@ -7758,6 +7805,9 @@ async function scanModuleStructure(btn) {
   const orig = btn.textContent;
   btn.disabled = true;
   const prevNames = pathTopics();   // für den ID-Abgleich (Rename-Erkennung) festhalten
+  // Alte Struktur festhalten (tiefe Kopie): bereits gelernte Themen, die der neue Scan
+  // fallen lässt, holen wir daraus mit ihrem alten Anzeigenamen + Kapitel zurück (v255).
+  const prevStructure = moduleStructure ? JSON.parse(JSON.stringify(moduleStructure)) : null;
   try {
     // Vorstufe: die persönlichen Anweisungen zu verbindlichen Auswahl-Vorgaben destillieren,
     // damit "diese Themen weglassen / das ist klausurrelevant" tatsächlich in die Liste einfließt.
@@ -7805,11 +7855,16 @@ async function scanModuleStructure(btn) {
     // API-Fehler bleibt die Struktur aus Phase 2 unverändert.
     btn.textContent = 'Abdeckung prüfen…';
     try { moduleStructure = await ensureScanCoverage(moduleStructure, overview, directiveBlk); } catch {}
-    const newNames = moduleStructure.kapitel.flatMap(k => k.themen);
+    let newNames = moduleStructure.kapitel.flatMap(k => k.themen);
     // IDs gegen die alten Themen abgleichen: Rename ⇒ ID bleibt ⇒ Fortschritt bleibt.
     // Semantischer Abgleich via Embeddings (robust gegen Umformulierung); null → Token-Fallback.
     btn.textContent = 'Fortschritt abgleichen…';
     const sim = prevNames.length ? await embedSimFn([...prevNames, ...newNames]) : null;
+    // Bereits gelernte Themen, die der neue Scan fallen lässt, VOR dem Reconcile
+    // zurückholen (v255) – sonst geht ihr Abhak-Status verloren. Danach newNames neu
+    // aus der (jetzt ergänzten) Struktur ziehen, damit Reconcile sie mit-abgleicht.
+    const retained = retainLearnedTopics(prevStructure, sim);
+    if (retained) newNames = moduleStructure.kapitel.flatMap(k => k.themen);
     reconcileTopicUids(prevNames, newNames, sim);
     moduleStructure.ids = topicUids;
     // Flache Liste = ALLE Strukturthemen (kein 30er-Cut): der Lernpfad zählt sie
@@ -7842,6 +7897,7 @@ async function scanModuleStructure(btn) {
     renderMilestone();
     loadLernpfad();
     if (repair.healed) setTimeout(() => toast(`✅ ${repair.healed} bereits gelernte${repair.healed === 1 ? 's Thema' : ' Themen'} wieder als erledigt verknüpft.`, 'success', 4500), 300);
+    if (retained) setTimeout(() => toast(`📌 ${retained} bereits abgeschlossene${retained === 1 ? 's Thema' : ' Themen'} behalten (vom Re-Scan nicht fallen gelassen).`, 'info', 5000), retained && repair.healed ? 900 : 300);
     // Re-Scan: zusätzlich anzeigen, was sich gegenüber der alten Struktur geändert hat (#7).
     const diffNote = prevNames.length ? ` (${formatScanDiff(scanDiff(prevNames, newNames))})` : '';
     toast(`🗺️ ${hauptthemen.length} Hauptthemen · ${scannedTopics.length} Lernthemen erkannt!${diffNote}`, 'success');
