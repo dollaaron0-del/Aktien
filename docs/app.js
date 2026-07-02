@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '251';
+const APP_VERSION = '253';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -702,6 +702,11 @@ const PDF_OCR_MAX_SCALE   = 3;
 const PDF_OCR_SPARSE_CHARS  = 200;
 const PDF_OCR_IMG_COVERAGE  = 0.45;
 const PDF_OCR_MAX_IMG_PAGES = 40;
+// Unter dieser Zahl Nicht-Whitespace-Zeichen (ohne den "=== Datei ==="-Header) gilt
+// ein extrahiertes Dokument als faktisch leer und wird NICHT gespeichert: solche
+// Docs (Bild-PDFs, deren OCR fehlschlug) lieferten bisher weder RAG-Kontext noch
+// Themen, tauchten aber als "erfolgreich hochgeladen" auf – 13 Stück im Bestand.
+const PDF_MIN_USABLE_CHARS  = 40;
 const PDF_OCR_SYS = 'Du bist eine präzise OCR-Engine für deutschsprachige Studien- und Schulunterlagen. Du gibst den Text einer Dokumentseite exakt und vollständig wieder.';
 const PDF_OCR_PROMPT = `Transkribiere den GESAMTEN Inhalt dieser Dokumentseite als reinen Text – exakt so, wie er dasteht. Gib NUR den Inhalt zurück: keine Einleitung, keine Kommentare, keine Code-Fences. Behalte Überschriften, Absätze, Aufzählungen und Tabellenzeilen in sinnvoller Lesereihenfolge bei. Formeln in Klartext bzw. LaTeX. Rein bildliche Abbildungen (Fotos, Grafiken ohne Text) NICHT beschreiben. Ist die Seite leer, antworte mit gar nichts.`;
 
@@ -770,6 +775,7 @@ async function extractPDF(file, onProgress) {
   const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
   let text  = `\n\n=== ${file.name} ===\n`;
   let ocrPages    = 0;   // Seiten, deren Text durch OCR ersetzt wurde
+  let ocrFailed   = 0;   // Seiten, die OCR brauchten, aber keinen Text lieferten
   let imgOcrTries = 0;   // Grafik-Slide-OCR-Versuche (kostengedeckelt)
   for (let i = 1; i <= pdf.numPages; i++) {
     const page    = await pdf.getPage(i);
@@ -790,11 +796,14 @@ async function extractPDF(file, onProgress) {
       // OCR liest die ganze Seite inkl. Fußzeile → längeres Ergebnis übernehmen,
       // damit der Grafik-Inhalt hinzukommt statt den Fußzeilentext zu ersetzen.
       if (ocr.length > pageText.length) { pageText = ocr; ocrPages++; }
+      // Bild-Seite blieb trotz OCR (praktisch) leer → zählen, damit der Upload das
+      // ehrlich melden kann statt eine stumm halbleere Datei als Erfolg zu verkaufen.
+      if (pageText.replace(/\s/g, '').length < PDF_OCR_MIN_CHARS) ocrFailed++;
     }
     text += pageText + '\n';
     if (onProgress) onProgress(i, pdf.numPages);
   }
-  return { text: text.trim(), pages: pdf.numPages, name: file.name, ocrPages };
+  return { text: text.trim(), pages: pdf.numPages, name: file.name, ocrPages, ocrFailed };
 }
 
 // ── System prompt builder ──────────────────────────────────────────────────
@@ -2038,14 +2047,15 @@ async function handleUpload(files) {
     let added = ''; const newFiles = [];
     const failedExtract = [];  // PDFs that could not be read at all
     const failedServer  = [];  // stored locally but the server rejected the save
+    const partialOcr    = [];  // gespeichert, aber einzelne Bild-Seiten blieben unlesbar
     let ocrTotal = 0;          // Seiten, die per Vision-OCR statt Textebene gelesen wurden
     for (let i = 0; i < files.length; i++) {
       const fileLabel = files.length > 1 ? `${files[i].name} (${i + 1}/${files.length})` : files[i].name;
       label.textContent = `Verarbeite ${fileLabel}…`;
       bar.style.width = '0%'; pct.textContent = '0%';
-      let text, pages, name, ocrPages = 0;
+      let text, pages, name, ocrPages = 0, ocrFailed = 0;
       try {
-        ({ text, pages, name, ocrPages } = await extractPDF(files[i], (done, total, phase) => {
+        ({ text, pages, name, ocrPages, ocrFailed } = await extractPDF(files[i], (done, total, phase) => {
           const p = Math.round((done / total) * 100);
           bar.style.width = p + '%'; pct.textContent = p + '%';
           label.textContent = phase === 'ocr'
@@ -2056,6 +2066,22 @@ async function handleUpload(files) {
         // One unreadable PDF must not discard the others in the batch.
         failedExtract.push(files[i].name);
         continue;
+      }
+      // Faktisch leere Extraktion (nur der "=== Datei ==="-Header übrig): NICHT
+      // speichern, sondern als Fehlschlag melden. Sonst liegt ein totes Dokument
+      // in der Sammlung, das der Themen-Scan und RAG still ignorieren – der Nutzer
+      // erfährt nie, dass sein Upload inhaltlich nie angekommen ist.
+      const usable = text.replace(/^===.*===$/m, '').replace(/\s/g, '').length;
+      if (usable < PDF_MIN_USABLE_CHARS) {
+        failedExtract.push(files[i].name + (ocrFailed
+          ? ' (Texterkennung fehlgeschlagen – bitte später erneut hochladen)'
+          : ' (kein lesbarer Text – Scan-/Bild-PDF?)'));
+        continue;
+      }
+      // Teilweise gelesen: einzelne Bild-Seiten blieben trotz OCR leer → warnen,
+      // damit der Nutzer weiß, dass diese Seiten fehlen (Neu-Upload holt sie nach).
+      if (ocrFailed > 0) {
+        partialOcr.push(`${name}: ${ocrFailed} ${ocrFailed === 1 ? 'Seite' : 'Seiten'} nicht lesbar`);
       }
       added += '\n\n' + text;
       ocrTotal += ocrPages;
@@ -2129,12 +2155,13 @@ async function handleUpload(files) {
 
     const okNames = newFiles.map(f => f.name).join(', ');
     const ocrNote = ocrTotal ? ` (${ocrTotal} ${ocrTotal === 1 ? 'Seite' : 'Seiten'} per Texterkennung gelesen)` : '';
-    if (failedServer.length || failedExtract.length) {
+    if (failedServer.length || failedExtract.length || partialOcr.length) {
       // Some files only made it into local storage (or not at all): say so
       // clearly instead of a misleading success message.
       const parts = [`✓ ${okNames} gespeichert${ocrNote}`];
       if (failedServer.length)  parts.push(`⚠️ nicht auf Server gesichert: ${failedServer.join(', ')} (nur auf diesem Gerät, keine Karteikarten/RAG)`);
       if (failedExtract.length) parts.push(`⚠️ nicht lesbar: ${failedExtract.join(', ')}`);
+      if (partialOcr.length)    parts.push(`⚠️ unvollständig gelesen: ${partialOcr.join(', ')}`);
       status.textContent = parts.join(' · ');
       status.className = 'sheet-status error';
       status.classList.remove('hidden');
@@ -5307,6 +5334,33 @@ function dedupeStructure(struct) {
   return { ...struct, kapitel };
 }
 
+// Ergänzungen aus dem Scan-Abdeckungs-Check in die Struktur einfügen (pur, testbar).
+// ergaenzungen: [{kapitel:"Titel", themen:["…"]}]. Bereits (normalisiert) vorhandene
+// Themen werden übersprungen, unbekannte Kapitel angelegt; maxAdd deckelt die Zahl
+// neuer Themen, damit der Check das Gesamt-Budget des Scans nicht sprengen kann.
+function mergeCoverageAdditions(struct, ergaenzungen, maxAdd = 6) {
+  if (!struct?.kapitel?.length || !Array.isArray(ergaenzungen)) return struct;
+  const have = new Set(struct.kapitel.flatMap(k => k.themen || []).map(normTopic));
+  const kapitel = struct.kapitel.map(k => ({ ...k, themen: [...(k.themen || [])] }));
+  let added = 0;
+  for (const e of ergaenzungen) {
+    if (!e || !Array.isArray(e.themen)) continue;
+    const titel = (typeof e.kapitel === 'string' && e.kapitel.trim()) || 'Weitere Themen';
+    let kap = kapitel.find(k => normTopic(k.titel) === normTopic(titel));
+    for (const t of e.themen) {
+      if (added >= maxAdd) break;
+      if (typeof t !== 'string') continue;
+      const key = normTopic(t);
+      if (!key || have.has(key)) continue;
+      if (!kap) { kap = { titel, lernziel: '', themen: [] }; kapitel.push(kap); }
+      kap.themen.push(t.trim());
+      have.add(key);
+      added++;
+    }
+  }
+  return { ...struct, kapitel: kapitel.filter(k => k.themen && k.themen.length) };
+}
+
 // ── Stabile Themen-IDs ─────────────────────────────────────────────────────
 // Fortschritt (gelernt, Wiederholung, Cache) hängt an einer einmal vergebenen ID
 // statt am Themen-Namen → überlebt Umbenennen/Re-Scan. topicUids (normName → ID)
@@ -7679,6 +7733,26 @@ async function markTopicDone() {
   }
 }
 
+// Abdeckungs-Check (Phase 3 des Themen-Scans): prüft je Dokument, ob sein zentraler
+// Inhalt von mindestens einem Lernthema abgedeckt ist, und liefert für echte Lücken
+// wenige gezielte Ergänzungen. Braucht die Per-Dokument-Overview (buildDocOverview);
+// ohne sie (offline/kein Server) wird nichts geändert. WEGLASSEN-Vorgaben des
+// Studenten gelten auch hier – bewusst ausgelassene Themen sind keine Lücke.
+async function ensureScanCoverage(struct, overview, directiveBlk) {
+  if (!struct?.kapitel?.length || !overview) return struct;
+  const topics = struct.kapitel.flatMap(k => k.themen);
+  const raw = await claudeLocal(
+    [{ role: 'user', content: `Kurze Auszüge aus ALLEN Dokumenten dieser Lernsammlung:\n\n${overview}\n\nBereits erkannte Lernthemen:\n${topics.map(t => '- ' + t).join('\n')}\n\nPrüfe Dokument für Dokument: Welche Dokumente behandeln einen ZENTRALEN Inhalt, der durch KEINES der Lernthemen abgedeckt ist? Ignoriere Dokumente ohne verwertbaren Auszug sowie reine Übungs-/Lösungsblätter zu bereits abgedeckten Themen.${directiveBlk || ''}` }],
+    [{ type: 'text', text: 'Du prüfst eine Lernthemen-Liste auf Vollständigkeit gegen eine Dokumentsammlung. Antworte NUR als JSON:\n{"ergaenzungen":[{"kapitel":"passendes oder neues Hauptthema","themen":["Lernthema max. 4 Wörter"]}]}\nMelde NUR echte Lücken (zentraler Inhalt eines Dokuments ohne passendes Thema) – ist alles abgedeckt: {"ergaenzungen":[]}. Höchstens 6 neue Themen insgesamt.' }],
+    700
+  );
+  const m = (raw || '').match(/\{[\s\S]*\}/);
+  if (!m) return struct;
+  const erg = parseJsonLoose(m[0])?.ergaenzungen;
+  if (!Array.isArray(erg) || !erg.length) return struct;
+  return dedupeStructure(mergeCoverageAdditions(struct, erg));
+}
+
 async function scanModuleStructure(btn) {
   if (!sessionTxt && !sessionId) { toast('Bitte zuerst Dokumente hochladen.', 'warn'); return; }
   const orig = btn.textContent;
@@ -7724,6 +7798,13 @@ async function scanModuleStructure(btn) {
     // Beinah-Duplikate über alle Kapitel hinweg entfernen (normalisierter Vergleich:
     // "Die Lichtreaktion" == "Lichtreaktion", "CO₂-Konzentration" == "CO2 Konzentration").
     moduleStructure = dedupeStructure({ kapitel });
+    // Phase 3: Abdeckungs-Check. Das 6–8-Hauptthemen/28-Themen-Budget kann ganze
+    // Dokumente verschlucken (real passiert: "Preisblasen auf Vermögensmärkten" mit
+    // 30k Zeichen bekam kein Thema). Ein Gegen-Check pro Dokument findet solche
+    // Lücken und ergänzt gezielt wenige Themen. Fail-open: ohne Overview oder bei
+    // API-Fehler bleibt die Struktur aus Phase 2 unverändert.
+    btn.textContent = 'Abdeckung prüfen…';
+    try { moduleStructure = await ensureScanCoverage(moduleStructure, overview, directiveBlk); } catch {}
     const newNames = moduleStructure.kapitel.flatMap(k => k.themen);
     // IDs gegen die alten Themen abgleichen: Rename ⇒ ID bleibt ⇒ Fortschritt bleibt.
     // Semantischer Abgleich via Embeddings (robust gegen Umformulierung); null → Token-Fallback.

@@ -56,7 +56,7 @@ const FN_DECLS = [
   'normTopic', 'jaccardTokens', 'parseNum', 'evalExpr', 'numEqual', 'numericCheck', 'applyNumericVerdict',
   'newTopicUid', 'topicId', 'topicKey', 'resolveKey',
   'dedupeTopicUids', 'reconcileTopicUids', 'ensureTopicUids', 'scanDiff', 'repairOrphanedProgress',
-  'scanDirectiveBlock',
+  'scanDirectiveBlock', 'mergeCoverageAdditions',
   'md', 'renderTable',
   'inkBoundingBox', 'enhanceInkContrast', 'catmullRomPts',
   'repairJson', 'parseJsonLoose', 'parseJsonResponse', 'salvageTruncatedJson',
@@ -81,7 +81,7 @@ const factory = new Function('self', 'katex', `
     normTopic, jaccardTokens, parseNum, evalExpr, numEqual, numericCheck, applyNumericVerdict, isTopicUid,
     newTopicUid, topicId, topicKey, resolveKey,
     dedupeTopicUids, reconcileTopicUids, ensureTopicUids, scanDiff, formatScanDiff, repairOrphanedProgress,
-    scanDirectiveBlock,
+    scanDirectiveBlock, mergeCoverageAdditions,
     md, renderTable,
     inkBoundingBox, enhanceInkContrast, catmullRomPts,
     repairJson, parseJsonLoose, parseJsonResponse, salvageTruncatedJson,
@@ -616,6 +616,46 @@ group('parseJsonResponse — JS-String-Konkatenation & SVG-Erhalt (v238)', () =>
   eq(M.parseJsonResponse('{"x":"sag \\" + \\" ende"}').x, 'sag " + " ende', 'escaptes \\" + \\" bleibt Inhalt');
   // Newline-in-String (bestehender repairJson-Pfad) funktioniert weiter.
   eq(M.parseJsonResponse('{"t":"zeile1\nzeile2"}').t, 'zeile1\nzeile2', 'literaler Zeilenumbruch im String gerettet');
+});
+
+group('mergeCoverageAdditions — Scan-Abdeckungs-Check fügt Lücken ein (v253)', () => {
+  const base = () => ({ kapitel: [
+    { titel: 'Geldpolitik', lernziel: 'x', themen: ['Geldmenge und Inflation'] },
+    { titel: 'Wachstum', lernziel: 'y', themen: ['Produktivität und Kapitalstock'] },
+  ] });
+
+  // Neues Thema in bestehendes Kapitel.
+  const a = M.mergeCoverageAdditions(base(), [{ kapitel: 'Geldpolitik', themen: ['Zentralbankoperationen'] }]);
+  eq(a.kapitel[0].themen.length, 2, 'Thema im bestehenden Kapitel ergänzt');
+  eq(a.kapitel[0].themen[1], 'Zentralbankoperationen', 'neues Thema angehängt');
+
+  // Unbekanntes Kapitel wird angelegt (der reale Preisblasen-Fall).
+  const b = M.mergeCoverageAdditions(base(), [{ kapitel: 'Vermögensmärkte', themen: ['Preisblasen Entstehung', 'Blasen platzen Folgen'] }]);
+  eq(b.kapitel.length, 3, 'neues Kapitel angelegt');
+  eq(b.kapitel[2].titel, 'Vermögensmärkte', 'Kapiteltitel übernommen');
+  eq(b.kapitel[2].themen.length, 2, 'beide Themen im neuen Kapitel');
+
+  // Normalisiert bereits vorhandene Themen werden NICHT doppelt eingefügt.
+  const c = M.mergeCoverageAdditions(base(), [{ kapitel: 'Geldpolitik', themen: ['Die Geldmenge und Inflation'] }]);
+  eq(c.kapitel[0].themen.length, 1, 'Beinah-Duplikat (Artikel-Präfix) übersprungen');
+
+  // maxAdd deckelt die Gesamtzahl neuer Themen.
+  const many = [{ kapitel: 'Neu', themen: ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8'] }];
+  const d = M.mergeCoverageAdditions(base(), many, 3);
+  eq(d.kapitel[2].themen.length, 3, 'maxAdd begrenzt die Ergänzungen');
+
+  // Kein Kapiteltitel → Sammel-Kapitel "Weitere Themen"; zweiter Aufruf-Eintrag
+  // ohne Titel landet im selben Sammel-Kapitel statt ein zweites anzulegen.
+  const e = M.mergeCoverageAdditions(base(), [{ themen: ['Extra A'] }, { themen: ['Extra B'] }]);
+  eq(e.kapitel.length, 3, 'nur EIN Sammel-Kapitel');
+  eq(e.kapitel[2].titel, 'Weitere Themen', 'Fallback-Titel');
+  eq(e.kapitel[2].themen.join(','), 'Extra A,Extra B', 'beide titellosen Ergänzungen gebündelt');
+
+  // Defensive: kaputte Eingaben lassen die Struktur unverändert.
+  const f = M.mergeCoverageAdditions(base(), 'quatsch');
+  eq(f.kapitel.length, 2, 'Nicht-Array-Ergänzungen → unverändert');
+  const g = M.mergeCoverageAdditions(base(), [{ kapitel: 'X', themen: [42, null, ''] }]);
+  eq(g.kapitel.length, 2, 'nur unbrauchbare Themen → kein leeres Kapitel');
 });
 
 // ── Ergebnis ──────────────────────────────────────────────────────────────────

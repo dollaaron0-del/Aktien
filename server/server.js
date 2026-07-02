@@ -1013,10 +1013,24 @@ app.get('/api/subjects/:id/documents/content', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Nutzbare Zeichen eines extrahierten Dokuments: ohne die vom Client eingefügten
+// "=== Dateiname ==="-Header und ohne Whitespace. Darunter liegende Uploads sind
+// leere Hüllen (nur Header), wie sie fehlgeschlagene OCR bisher hinterließ.
+const MIN_DOC_CHARS = 40;
+function usableDocChars(content) {
+  return String(content).replace(/^===.*===$/gm, '').replace(/\s/g, '').length;
+}
+
 // Accept pre-extracted text (from client-side PDF.js)
 app.post('/api/subjects/:id/documents/text', async (req, res) => {
   const { filename, content, skipCards } = req.body;
   if (!filename || !content) return res.status(400).json({ error: 'filename und content erforderlich' });
+  // Faktisch leere Extraktionen (Bild-/Scan-PDFs, deren OCR nichts lieferte) nicht
+  // speichern: solche Docs liegen sonst unsichtbar tot in der Sammlung – kein
+  // RAG-Kontext, keine Themen, aber "erfolgreich hochgeladen" für den Nutzer.
+  if (usableDocChars(content) < MIN_DOC_CHARS) {
+    return res.status(422).json({ error: 'Kein lesbarer Text im Dokument (Scan-/Bild-PDF?). Bitte erneut hochladen – Bildseiten werden dann per Texterkennung gelesen.' });
+  }
   try {
     const { rows } = await pool.query(
       'INSERT INTO documents (subject_id,filename,content) VALUES ($1,$2,$3) RETURNING id,filename,uploaded_at',
@@ -1059,6 +1073,14 @@ app.post('/api/subjects/:id/documents', upload.single('file'), async (req, res) 
       content = fs.readFileSync(req.file.path, 'utf8');
     }
     fs.unlinkSync(req.file.path);
+
+    // Gleiche Leer-Prüfung wie beim Text-Upload: pdftotext liefert bei reinen
+    // Bild-PDFs "erfolgreich" einen leeren String – das ist kein lesbares Dokument.
+    if (usableDocChars(content) < MIN_DOC_CHARS) {
+      return res.status(422).json({
+        error: 'Kein lesbarer Text im Dokument (Scan-/Bild-PDF?). Bitte über die App hochladen – Bildseiten werden dort per Texterkennung gelesen.',
+      });
+    }
 
     const { rows } = await pool.query(
       'INSERT INTO documents (subject_id,filename,content) VALUES ($1,$2,$3) RETURNING id,filename,uploaded_at',
