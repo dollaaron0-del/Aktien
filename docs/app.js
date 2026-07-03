@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '255';
+const APP_VERSION = '256';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -1910,7 +1910,24 @@ async function renderDocList() {
 
   wrap.classList.remove('hidden');
   list.innerHTML = '';
+
+  // Nicht lesbare Dokumente: leere Hüllen (nur Dateiname-Header, kein Text) –
+  // typisch für alte Uploads, deren OCR still fehlschlug. usable_chars kommt vom
+  // Server; bei rein lokalen (localforage) Docs kennen wir den Inhalt nicht.
+  const isUnreadable = d => fromServer && typeof d.usable_chars === 'number'
+    && d.usable_chars < PDF_MIN_USABLE_CHARS;
+  const unreadableCount = docs.filter(isUnreadable).length;
+  if (unreadableCount) {
+    const note = document.createElement('div');
+    note.className = 'doc-unreadable-note';
+    note.innerHTML = `⚠️ ${unreadableCount} von ${docs.length} Dokument${docs.length !== 1 ? 'en' : ''} `
+      + `${unreadableCount === 1 ? 'ist' : 'sind'} nicht lesbar (kein Text erkannt). `
+      + `Bitte als PDF mit Textebene neu hochladen.`;
+    list.appendChild(note);
+  }
+
   docs.forEach(doc => {
+    const unreadable = isUnreadable(doc);
     const date = new Date(doc.uploaded_at).toLocaleDateString('de-DE', {
       day: '2-digit', month: '2-digit', year: '2-digit',
     });
@@ -1918,12 +1935,14 @@ async function renderDocList() {
       `<option value="${t.value}"${doc.doc_type === t.value ? ' selected' : ''}>${t.label}</option>`
     ).join('');
     const row = document.createElement('div');
-    row.className = 'doc-row';
+    row.className = 'doc-row' + (unreadable ? ' doc-row--unreadable' : '');
     row.innerHTML = `
       <div class="doc-row-info">
-        <span class="doc-row-icon">📄</span>
+        <span class="doc-row-icon">${unreadable ? '⚠️' : '📄'}</span>
         <div>
-          <div class="doc-row-name">${esc(doc.filename)}</div>
+          <div class="doc-row-name">${esc(doc.filename)}${unreadable
+            ? ' <span class="doc-badge-unreadable" title="Beim Upload konnte kein Text gelesen werden – bitte als PDF mit Textebene neu hochladen.">nicht lesbar</span>'
+            : ''}</div>
           <div class="doc-row-date">${date}</div>
         </div>
       </div>
@@ -6525,10 +6544,19 @@ function openUnit(unit) {
   document.getElementById('lernen-step1-footer').classList.add('hidden');
   document.getElementById('lernen-tab-aufgabe').disabled = true;
   document.getElementById('lernen-done-btn').classList.add('hidden');
-  lernenSwitchStep(1);
   // Vorwissen-Abfrage entfernt – direkt zur Erklärung, egal ob neu, fällig oder Wiederholung.
   const isDue = unit.themen.some(t => topicReviewDue(t + '::' + lernenCurrentDiff));
-  document.getElementById('lernen-erkl-loading').style.display = '';
+  // Experte-Modus: Die Theorie "sitzt" – keine Erklärung generieren, den Erklär-Tab
+  // ausblenden und direkt zur Klausuraufgabe (loadTopicContent delegiert dann an
+  // loadExpertTask). Auf allen niedrigeren Stufen: normale Erklärung in Schritt 1.
+  const isExpert = lernenCurrentDiff === 'pruefungsnah';
+  document.getElementById('lernen-tab-erkl').classList.toggle('hidden', isExpert);
+  if (isExpert) {
+    lernenSwitchStep(2);
+  } else {
+    lernenSwitchStep(1);
+    document.getElementById('lernen-erkl-loading').style.display = '';
+  }
   loadTopicContent(topic, isDue);
 }
 
@@ -6792,7 +6820,43 @@ function renderTopicContent(topic, data) {
   }
 }
 
+// Experte-Modus-Pfad: Statt der vollen Erklärung wird NUR die Klausuraufgabe
+// erzeugt (bzw. aus dem Cache geholt) und direkt Schritt 2 angezeigt. Die
+// Aufgaben-Generierung selbst läuft über den bestehenden On-Demand-Pfad
+// (regenLernenTask via openLernenTask), der auf 'pruefungsnah' bereits das
+// Klausurformat + den Altklausur-Kontext (examDocContext) nutzt.
+async function loadExpertTask(topic, forceFresh = false) {
+  const bar = document.getElementById('lernen-task-bar');
+  document.getElementById('lernen-tab-aufgabe').disabled = false;
+  lernenSwitchStep(2);
+  const cached = forceFresh ? null : await localforage.getItem(lernenCacheKey()).catch(() => null);
+  // Stale guard: user may have navigated to a different topic while awaiting cache/AI
+  if (currentExplainerTopic !== topic) return;
+  if (cached && cached.aufgabe && cached.aufgabe.trim()) {
+    lernenTopicData = cached;
+    if (bar) bar.innerHTML = safeHtml(md(cached.aufgabe));
+    const valuesEl = document.getElementById('lernen-task-values');
+    if (valuesEl) {
+      if (Array.isArray(cached.werte) && cached.werte.length > 0) {
+        valuesEl.innerHTML = cached.werte.map(v => `<span class="task-value-chip">${esc(v)}</span>`).join('');
+        valuesEl.classList.remove('hidden');
+      } else { valuesEl.innerHTML = ''; valuesEl.classList.add('hidden'); }
+    }
+    document.getElementById('lernen-regen-btn').classList.remove('hidden');
+    armLernenPrefetch();
+    return;
+  }
+  // Noch nichts im Cache → frisch erzeugen. openLernenTask erwartet ein truthy
+  // lernenTopicData, erzeugt die Aufgabe still (initial) und blendet den
+  // Regen-Button ein; regenLernenTask cached das Ergebnis unter lernenCacheKey().
+  lernenTopicData = {};
+  await openLernenTask();
+}
+
 async function loadTopicContent(topic, forceFresh = false) {
+  // Experte-Modus: Theorie "sitzt" → keine Erklärung, nur die Klausuraufgabe.
+  const _lvl = selectedDiffIdx !== null ? MILESTONE_LEVELS[selectedDiffIdx] : calculateMilestone();
+  if (_lvl.diff === 'pruefungsnah') { await loadExpertTask(topic, forceFresh); return; }
   // Serve from cache if available (außer bei fälliger Wiederholung → frische Aufgabe)
   const cached = forceFresh ? null : await localforage.getItem(lernenCacheKey()).catch(() => null);
   // Stale guard: user may have navigated to a different topic while awaiting cache/AI

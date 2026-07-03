@@ -945,10 +945,14 @@ async function generationDocContext(subjectId, query, k = 6) {
 
 app.get('/api/subjects/:id/documents', async (req, res) => {
   try {
+    // usable_chars spiegelt usableDocChars() in SQL: "=== Datei ==="-Header-Zeilen
+    // und Whitespace raus. So sieht das UI, welche Uploads nur leere Hüllen sind
+    // (fehlgeschlagene OCR vor v253) und als "nicht lesbar" markiert werden können.
+    const USABLE = `length(regexp_replace(regexp_replace(content, '^===.*===$', '', 'ng'), '\\s', '', 'g'))`;
     let rows;
     try {
       ({ rows } = await pool.query(
-        'SELECT id,filename,doc_type,uploaded_at FROM documents WHERE subject_id=$1 ORDER BY uploaded_at DESC',
+        `SELECT id,filename,doc_type,uploaded_at,${USABLE} AS usable_chars FROM documents WHERE subject_id=$1 ORDER BY uploaded_at DESC`,
         [req.params.id]
       ));
     } catch (e) {
@@ -956,7 +960,7 @@ app.get('/api/subjects/:id/documents', async (req, res) => {
       // gracefully to the list without the tag instead of 500-ing.
       console.error('documents list without doc_type:', e.message);
       ({ rows } = await pool.query(
-        'SELECT id,filename,NULL AS doc_type,uploaded_at FROM documents WHERE subject_id=$1 ORDER BY uploaded_at DESC',
+        `SELECT id,filename,NULL AS doc_type,uploaded_at,${USABLE} AS usable_chars FROM documents WHERE subject_id=$1 ORDER BY uploaded_at DESC`,
         [req.params.id]
       ));
     }
