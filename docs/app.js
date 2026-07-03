@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '256';
+const APP_VERSION = '257';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -6743,7 +6743,7 @@ function getDiffInstr(effLevel, examCtx, siblings = [], lernziel = '', isSolo = 
   const abgrenzung = (isSolo && siblings.length)
     ? ` THEMEN-ABGRENZUNG (verbindlich): Dieses Thema ist Teil eines Kapitels mit weiteren, EIGENSTÄNDIGEN Nachbarthemen: ${siblings.slice(0, 5).join(', ')}. Behandle AUSSCHLIESSLICH den eigenen Kern DIESES Themas – breite den Stoff der Nachbarthemen weder in der Erklärung noch in der Aufgabe aus. Trägt ein Konzept den Namen eines Nachbarthemas (z.B. gibt es ein eigenes Nachbarthema "Fünf-Kräfte Modell Porter"), gehört seine ausführliche Behandlung DORTHIN – hier höchstens kurz nennen und klar abgrenzen. Zwei Nachbarthemen desselben Kapitels dürfen NIEMALS dieselbe Erklärung oder dieselbe Aufgabe ergeben.`
     : '';
-  const integrate = `${sibTxt}${zielTxt} Baue eine MEHRTEILIGE Aufgabe (Teil a, b, c …), deren Teile aufeinander aufbauen (z.B. a) erklären/berechnen, b) anwenden, c) bewerten/diskutieren). Der Studierende muss SELBST erkennen, welche Methode/welches Konzept je Teil greift – nenne das NICHT vorab. NUR falls die Aufgabe überhaupt einen Rechen-Teil enthält UND ein späterer Teil (Interpretation, Diskussion, Begründung, ökonomische Einordnung) inhaltlich auf dessen ZAHLENERGEBNIS aufbaut, MUSS der Aufgabentext dieses Teils den Bezug auf die selbst berechneten Werte ausdrücklich verlangen (z.B. "Interpretiere dein in Teil a) berechnetes Ergebnis …") – es darf dann nicht offen bleiben, ob eine allgemeine oder zahlengestützte Antwort erwartet wird.${klar}`;
+  const integrate = `${sibTxt}${zielTxt} Baue eine MEHRTEILIGE Aufgabe (Teil a, b, c …), deren Teile aufeinander aufbauen (z.B. a) erklären/berechnen, b) anwenden, c) bewerten/diskutieren). BENENNE in jeder Teilaufgabe ausdrücklich das WERKZEUG, das anzuwenden ist – das konkrete Konzept/Modell/Framework/die Kennzahl, an der die Antwort ausgerichtet werden soll (z.B. "Ordnen Sie die genannten Maßnahmen den vier P's des Marketing-Mix zu", "Analysieren Sie die Branche mit Porters Fünf-Kräfte-Modell", "Berechnen und interpretieren Sie den Deckungsbeitrag"). So weiß der/die Studierende, WORAUF die Antwort abzielt und welche Struktur erwartet wird. Das benennt nur das Werkzeug – die eigentliche LÖSUNG (das Ergebnis, die konkrete Zuordnung, die Bewertung) bleibt ungesagt und ist die Herausforderung. Verlange NIEMALS bloß "einen Text schreiben" oder eine vage offene Diskussion zum Thema: Jede Teilaufgabe ist an ein konkret benanntes Konzept/Kriterium gebunden und macht unmissverständlich klar, was angewandt werden soll. NUR falls die Aufgabe überhaupt einen Rechen-Teil enthält UND ein späterer Teil (Interpretation, Diskussion, Begründung, ökonomische Einordnung) inhaltlich auf dessen ZAHLENERGEBNIS aufbaut, MUSS der Aufgabentext dieses Teils den Bezug auf die selbst berechneten Werte ausdrücklich verlangen (z.B. "Interpretiere dein in Teil a) berechnetes Ergebnis …") – es darf dann nicht offen bleiben, ob eine allgemeine oder zahlengestützte Antwort erwartet wird.${klar}`;
   switch (effLevel.diff) {
     case 'leicht':
       return `Niveau: GRUNDLAGEN (Stufe 2 von 5).
