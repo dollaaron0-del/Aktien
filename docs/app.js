@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '257';
+const APP_VERSION = '258';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -6997,10 +6997,19 @@ async function regenLernenTask(opts = {}) {
     const kbQ = isComposite ? unit.themen.join(', ') : topic;
     const scope = lernenScope();
     await hydrateTaskHist(scope);   // Avoid-Liste der zuletzt gestellten Aufgaben laden
+    // Token-Budget: eine einfache Aufgabe passt in ~600. Ab 'schwer'/'pruefungsnah'
+    // ist die Aufgabe aber eine MEHRTEILIGE Klausuraufgabe (Teil a/b/c mit
+    // Werkzeug-Benennung + Punkteangabe, v257) → sie braucht ~575–900 Tokens und
+    // wurde bei hartem 600er-Cap abgeschnitten (stop_reason=max_tokens → JSON
+    // unparsebar → "Aufgabe konnte nicht erstellt werden"). Das war der einzige
+    // Generierungspfad des Experte-Modus (loadExpertTask→openLernenTask→hier),
+    // daher schlug Experte IMMER fehl. Genug Luft geben; kürzere Aufgaben nutzen
+    // ohnehin nur, was sie brauchen (max_tokens ist Obergrenze, kein Fixwert).
+    const taskMaxTok = (effLevel.diff === 'pruefungsnah' || effLevel.diff === 'schwer') ? 1500 : 600;
     const raw = await claudeLocalKb(
       [{ role: 'user', content: `Generiere eine neue Übungsaufgabe ${gegenstand}.` }],
       `Generiere eine NEUE, andere Übungsaufgabe ${gegenstand} – ausschließlich auf Basis der bereitgestellten Unterlagen.\n${diffInstr}\n\nDie Aufgabe muss dem Niveau entsprechen (Komplexität, Sprache, Tiefe).\nBei mehreren Teilfragen jede Frage auf einer neuen Zeile (\\n\\n).\nNIEMALS Lösungen, Musterlösungen oder Hinweise auf die richtigen Antworten im Aufgabentext!${taskAvoidBlock(scope)}\n\nAntworte NUR als JSON:\n{"aufgabe":"Aufgabentext ohne Lösungen. Jede Teilfrage auf eigener Zeile."}`,
-      600,
+      taskMaxTok,
       kbQ
     );
     const m = raw.match(/\{[\s\S]*\}/);
