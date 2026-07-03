@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '259';
+const APP_VERSION = '261';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -547,13 +547,49 @@ function repairJson(s) {
   return out;
 }
 
+// Unescapte ASCII-Doppelquotes INNERHALB von String-Werten escapen (v261).
+// Auslöser: die v259-Fallvignette lässt das Modell Firmennamen in Anführungs-
+// zeichen setzen – oft gemischt „FRESHCYCLE" (typografisch auf, ASCII zu). Das
+// ASCII-" beendet den JSON-String mittendrin → parse-fail → "Aufgabe konnte
+// nicht erstellt werden". Heuristik: ein " im String ist nur dann der ECHTE
+// Abschluss, wenn danach (Whitespace übersprungen) JSON-Struktur folgt
+// (, } ] : oder Ende) – sonst ist es Prosa und wird zu \" escaped.
+// Grenzfall bleibt Prosa wie »sagte "Hallo", und« (Quote direkt vor Komma) –
+// dort ist der Abschluss nicht unterscheidbar; das ist eine Retry-Stufe,
+// schlimmstenfalls scheitert der Parse wie bisher.
+function repairUnescapedQuotes(s) {
+  let out = '', inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc)        { out += c; esc = false; continue; }
+    if (c === '\\') { out += c; esc = true;  continue; }
+    if (c === '"') {
+      if (!inStr) { inStr = true; out += c; continue; }
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j])) j++;
+      const nxt = s[j];
+      if (nxt === undefined || nxt === ',' || nxt === '}' || nxt === ']' || nxt === ':') {
+        inStr = false; out += c;
+      } else {
+        out += '\\"';
+      }
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 // Tolerant JSON.parse for an already-extracted object/array string: retries
-// once with the repair pass. Throws (like JSON.parse) if still unparseable, so
-// callers' existing try/catch keep working — but the common newline case now
-// recovers instead of failing the whole feature.
+// with the repair passes. Throws (like JSON.parse) if still unparseable, so
+// callers' existing try/catch keep working — but the common newline and
+// inner-quote cases now recover instead of failing the whole feature.
 function parseJsonLoose(str) {
   try { return JSON.parse(str); } catch {}
-  return JSON.parse(repairJson(str));
+  try { return JSON.parse(repairJson(str)); } catch {}
+  // Quote-Reparatur ZUERST, dann repairJson: erst mit korrekten Stringgrenzen
+  // trifft dessen inStr-Tracking (Newline-Escaping) wieder zu.
+  return JSON.parse(repairJson(repairUnescapedQuotes(str)));
 }
 
 // Extract and parse the first JSON object from a model response.
@@ -563,6 +599,7 @@ function parseJsonResponse(raw) {
   function tryParse(s) {
     try { return JSON.parse(s); } catch {}
     try { return JSON.parse(repairJson(s)); } catch {}
+    try { return JSON.parse(repairJson(repairUnescapedQuotes(s))); } catch {}
     return null;
   }
   const cb = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
@@ -583,6 +620,7 @@ function jsonWasTruncated(raw) {
   if (!ob) return true;
   try { JSON.parse(ob[0]); return false; } catch {}
   try { JSON.parse(repairJson(ob[0])); return false; } catch {}
+  try { JSON.parse(repairJson(repairUnescapedQuotes(ob[0]))); return false; } catch {}
   return true;
 }
 
@@ -6743,7 +6781,7 @@ function getDiffInstr(effLevel, examCtx, siblings = [], lernziel = '', isSolo = 
   const abgrenzung = (isSolo && siblings.length)
     ? ` THEMEN-ABGRENZUNG (verbindlich): Dieses Thema ist Teil eines Kapitels mit weiteren, EIGENSTÄNDIGEN Nachbarthemen: ${siblings.slice(0, 5).join(', ')}. Behandle AUSSCHLIESSLICH den eigenen Kern DIESES Themas – breite den Stoff der Nachbarthemen weder in der Erklärung noch in der Aufgabe aus. Trägt ein Konzept den Namen eines Nachbarthemas (z.B. gibt es ein eigenes Nachbarthema "Fünf-Kräfte Modell Porter"), gehört seine ausführliche Behandlung DORTHIN – hier höchstens kurz nennen und klar abgrenzen. Zwei Nachbarthemen desselben Kapitels dürfen NIEMALS dieselbe Erklärung oder dieselbe Aufgabe ergeben.`
     : '';
-  const integrate = `${sibTxt}${zielTxt} Baue eine MEHRTEILIGE Aufgabe (Teil a, b, c …) rund um EINE gemeinsame, konkrete Ausgangssituation – eine kurze Fallvignette (ein bestimmtes Unternehmen/Produkt/Markt/Szenario mit ein paar konkreten Angaben), die EINMAL zu Beginn geschildert wird und für ALLE Teile gilt. Diese gemeinsame Fallsituation IST der rote Faden; jede Teilaufgabe knüpft sichtbar an sie an. ROTER FADEN & KEINE WIEDERHOLUNG (verbindlich): Jede Teilaufgabe beleuchtet einen ANDEREN Aspekt bzw. eine andere Entscheidung dieses Falls und verlangt ein ANDERES Werkzeug / eine andere Denkleistung – NICHT dieselbe Frage in Variation. Vermeide ausdrücklich das Muster "a) erklären, b) anwenden, c) bewerten DESSELBEN Begriffs": das fragt im Kern dreimal dasselbe und wirkt beliebig. Die Teile bilden zusammen einen Bogen, in dem der Fall Schritt für Schritt weitergedacht wird (z.B. a) Ausgangslage mit Werkzeug X analysieren, b) darauf aufbauend eine Entscheidung/Rechnung mit Werkzeug Y herleiten, c) eine Konsequenz oder Alternative mit Kriterium Z bewerten), aber jeder Teil steht auf einem EIGENEN inhaltlichen Bein und liefert eine eigenständige Erkenntnis. BENENNE in jeder Teilaufgabe ausdrücklich das WERKZEUG, das anzuwenden ist – das konkrete Konzept/Modell/Framework/die Kennzahl, an der die Antwort ausgerichtet werden soll (z.B. "Ordnen Sie die genannten Maßnahmen den vier P's des Marketing-Mix zu", "Analysieren Sie die Branche mit Porters Fünf-Kräfte-Modell", "Berechnen und interpretieren Sie den Deckungsbeitrag"). So weiß der/die Studierende, WORAUF die Antwort abzielt und welche Struktur erwartet wird. Das benennt nur das Werkzeug – die eigentliche LÖSUNG (das Ergebnis, die konkrete Zuordnung, die Bewertung) bleibt ungesagt und ist die Herausforderung. Verlange NIEMALS bloß "einen Text schreiben" oder eine vage offene Diskussion zum Thema: Jede Teilaufgabe ist an ein konkret benanntes Konzept/Kriterium gebunden und macht unmissverständlich klar, was angewandt werden soll. NUR falls die Aufgabe überhaupt einen Rechen-Teil enthält UND ein späterer Teil (Interpretation, Diskussion, Begründung, ökonomische Einordnung) inhaltlich auf dessen ZAHLENERGEBNIS aufbaut, MUSS der Aufgabentext dieses Teils den Bezug auf die selbst berechneten Werte ausdrücklich verlangen (z.B. "Interpretiere dein in Teil a) berechnetes Ergebnis …") – es darf dann nicht offen bleiben, ob eine allgemeine oder zahlengestützte Antwort erwartet wird.${klar}`;
+  const integrate = `${sibTxt}${zielTxt} Baue eine MEHRTEILIGE Aufgabe (Teil a, b, c …) rund um EINE gemeinsame, konkrete Ausgangssituation – eine kurze Fallvignette (ein bestimmtes Unternehmen/Produkt/Markt/Szenario mit ein paar konkreten Angaben), die EINMAL zu Beginn geschildert wird und für ALLE Teile gilt. Schreibe Eigennamen (Firma, Produkt) OHNE Anführungszeichen oder in deutschen „…“ (typografisch, auch das schließende Zeichen) – NIEMALS gerade doppelte Anführungszeichen (") im Aufgabentext, sie zerstören das JSON. Diese gemeinsame Fallsituation IST der rote Faden; jede Teilaufgabe knüpft sichtbar an sie an. ROTER FADEN & KEINE WIEDERHOLUNG (verbindlich): Jede Teilaufgabe beleuchtet einen ANDEREN Aspekt bzw. eine andere Entscheidung dieses Falls und verlangt ein ANDERES Werkzeug / eine andere Denkleistung – NICHT dieselbe Frage in Variation. Vermeide ausdrücklich das Muster "a) erklären, b) anwenden, c) bewerten DESSELBEN Begriffs": das fragt im Kern dreimal dasselbe und wirkt beliebig. Die Teile bilden zusammen einen Bogen, in dem der Fall Schritt für Schritt weitergedacht wird (z.B. a) Ausgangslage mit Werkzeug X analysieren, b) darauf aufbauend eine Entscheidung/Rechnung mit Werkzeug Y herleiten, c) eine Konsequenz oder Alternative mit Kriterium Z bewerten), aber jeder Teil steht auf einem EIGENEN inhaltlichen Bein und liefert eine eigenständige Erkenntnis. BENENNE in jeder Teilaufgabe ausdrücklich das WERKZEUG, das anzuwenden ist – das konkrete Konzept/Modell/Framework/die Kennzahl, an der die Antwort ausgerichtet werden soll (z.B. "Ordnen Sie die genannten Maßnahmen den vier P's des Marketing-Mix zu", "Analysieren Sie die Branche mit Porters Fünf-Kräfte-Modell", "Berechnen und interpretieren Sie den Deckungsbeitrag"). So weiß der/die Studierende, WORAUF die Antwort abzielt und welche Struktur erwartet wird. Das benennt nur das Werkzeug – die eigentliche LÖSUNG (das Ergebnis, die konkrete Zuordnung, die Bewertung) bleibt ungesagt und ist die Herausforderung. Verlange NIEMALS bloß "einen Text schreiben" oder eine vage offene Diskussion zum Thema: Jede Teilaufgabe ist an ein konkret benanntes Konzept/Kriterium gebunden und macht unmissverständlich klar, was angewandt werden soll. NUR falls die Aufgabe überhaupt einen Rechen-Teil enthält UND ein späterer Teil (Interpretation, Diskussion, Begründung, ökonomische Einordnung) inhaltlich auf dessen ZAHLENERGEBNIS aufbaut, MUSS der Aufgabentext dieses Teils den Bezug auf die selbst berechneten Werte ausdrücklich verlangen (z.B. "Interpretiere dein in Teil a) berechnetes Ergebnis …") – es darf dann nicht offen bleiben, ob eine allgemeine oder zahlengestützte Antwort erwartet wird.${klar}`;
   switch (effLevel.diff) {
     case 'leicht':
       return `Niveau: GRUNDLAGEN (Stufe 2 von 5).

@@ -59,7 +59,7 @@ const FN_DECLS = [
   'scanDirectiveBlock', 'mergeCoverageAdditions',
   'md', 'renderTable',
   'inkBoundingBox', 'enhanceInkContrast', 'catmullRomPts',
-  'repairJson', 'parseJsonLoose', 'parseJsonResponse', 'salvageTruncatedJson',
+  'repairJson', 'repairUnescapedQuotes', 'parseJsonLoose', 'parseJsonResponse', 'salvageTruncatedJson',
 ];
 const CONST_DECLS = ['isTopicUid', 'formatScanDiff', 'EMBED_MATCH_THRESHOLD', 'DIFF_IDX', 'diffIdx', 'INK_CELL', 'INK_MIN_PIXELS', 'INK_WHITE_CUTOFF', 'INK_GAMMA', 'SPLINE_SEG'];
 
@@ -85,7 +85,7 @@ const factory = new Function('self', 'katex', `
     scanDirectiveBlock, mergeCoverageAdditions,
     md, renderTable,
     inkBoundingBox, enhanceInkContrast, catmullRomPts,
-    repairJson, parseJsonLoose, parseJsonResponse, salvageTruncatedJson,
+    repairJson, repairUnescapedQuotes, parseJsonLoose, parseJsonResponse, salvageTruncatedJson,
     _setUids: m => { topicUids = m; },
     _getUids: () => topicUids,
     _setPath: p => { __path = p; },
@@ -653,6 +653,33 @@ group('parseJsonResponse — JS-String-Konkatenation & SVG-Erhalt (v238)', () =>
   eq(M.parseJsonResponse('{"x":"sag \\" + \\" ende"}').x, 'sag " + " ende', 'escaptes \\" + \\" bleibt Inhalt');
   // Newline-in-String (bestehender repairJson-Pfad) funktioniert weiter.
   eq(M.parseJsonResponse('{"t":"zeile1\nzeile2"}').t, 'zeile1\nzeile2', 'literaler Zeilenumbruch im String gerettet');
+});
+
+group('repairUnescapedQuotes — unescapte "-Zeichen in Stringwerten (v261)', () => {
+  // Realfall (Experte-Fallvignette): Firmenname gemischt „…" – typografisch auf,
+  // ASCII zu. Das nackte " beendete den JSON-String → parse-fail → "Aufgabe
+  // konnte nicht erstellt werden", obwohl die Antwort inhaltlich komplett war.
+  const vignette = '{\n  "aufgabe": "FALLSTUDIE: MARKTEINGANG VON „FRESHCYCLE" – EINEM VERLEIHSYSTEM\\n\\nTeil a) Analysieren Sie. (8 Punkte)"\n}';
+  const v = M.parseJsonLoose(vignette);
+  ok(/FRESHCYCLE"/.test(v.aufgabe), 'inneres ASCII-Quote als Inhalt gerettet');
+  ok(/8 Punkte/.test(v.aufgabe), 'Rest des Werts bleibt erhalten');
+
+  // Auch der parseJsonResponse-Pfad (Erklärungen, code-fenced) nutzt die Stufe.
+  const fenced = '```json\n{"was":"Das Modell „X" erklärt Y.","warum":"wichtig"}\n```';
+  const f = M.parseJsonResponse(fenced);
+  eq(f.warum, 'wichtig', 'Folgefeld nach dem inneren Quote überlebt');
+  ok(/„X"/.test(f.was), 'inneres Quote im Wert erhalten');
+
+  // Echte Abschluss-Quotes (vor , } ] :) bleiben Delimiter.
+  eq(M.repairUnescapedQuotes('{"a":"x","b":"y"}'), '{"a":"x","b":"y"}', 'sauberes JSON unverändert');
+  // Bereits escapte Quotes werden nicht doppelt escaped.
+  eq(M.parseJsonLoose('{"a":"sag \\"hi\\" laut"}').a, 'sag "hi" laut', 'escapte Quotes unangetastet');
+  // Mehrere innere Quotes in einem Wert.
+  eq(M.parseJsonLoose('{"a":"„Alpha" und „Beta" GmbH"}').a, '„Alpha" und „Beta" GmbH', 'mehrere innere Quotes gerettet');
+  // parseJsonLoose wirft weiterhin bei hoffnungslosem Input (Caller-Verträge).
+  let threw = false;
+  try { M.parseJsonLoose('kein json'); } catch { threw = true; }
+  ok(threw, 'parseJsonLoose wirft bei Nicht-JSON weiterhin');
 });
 
 group('mergeCoverageAdditions — Scan-Abdeckungs-Check fügt Lücken ein (v253)', () => {
