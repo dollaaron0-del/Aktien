@@ -1140,15 +1140,21 @@ app.post('/api/subjects/:id/kb/reindex', async (req, res) => {
       try {
         await pool.query('DELETE FROM doc_chunks WHERE subject_id=$1', [sid]).catch(() => {});
         await setKbStatus(sid, 'indexing');
-        let budgetHit = false;
+        let budgetHit = false, errorHit = false;
         for (const d of docs) {
           const st = await indexDocument(sid, d.id, { skipFinalize: true });
           if (st === 'budget') { budgetHit = true; break; }   // Rest bliebe un-indexiert → abbrechen
+          if (st === 'error') errorHit = true;                // Doku übersprungen → KB lückenhaft
         }
-        // Overview bauen + Status. Budget-Abbruch mitten im Batch → KB ist
-        // unvollständig, NICHT als 'ready' ausweisen (der Client nutzt bei
+        // Overview bauen + Status. Budget-Abbruch ODER Fehler-Docs mitten im Batch →
+        // KB ist unvollständig, NICHT als 'ready' ausweisen (der Client nutzt bei
         // 'pending' den vollständigen Inline-Pfad) – atomar im rebuild gesetzt.
-        await rebuildSubjectKb(sid, budgetHit ? 'pending' : undefined);
+        // Ohne den errorHit-Check landete ein Batch, dessen Docs an API-Fehlern
+        // scheiterten (z.B. Anthropic-Guthaben leer → 400 je Doku), trotzdem auf
+        // 'ready': Retrieval lieferte dann irrelevante Chunks der wenigen indexierten
+        // Docs, und die Generierung verweigerte mangels Stoff ("Aufgabe konnte nicht
+        // erstellt werden") – statt auf den vollständigen Inline-Pfad auszuweichen.
+        await rebuildSubjectKb(sid, (budgetHit || errorHit) ? 'pending' : undefined);
       } catch (e) { console.error('KB reindex failed:', e.message); await setKbStatus(sid, 'error'); }
     })();
   } catch (e) { res.status(500).json({ error: e.message }); }
