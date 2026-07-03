@@ -1281,6 +1281,7 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   font-family: inherit;
 }
 .settings-ta:focus { outline: none; border-color: var(--accent); }
+.cheat-wish { max-width: 420px; }
 .settings-ta::placeholder { color: var(--text2); }
 .settings-input {
   width: 100%; padding: 11px 14px;

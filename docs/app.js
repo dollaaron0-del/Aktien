@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '261';
+const APP_VERSION = '262';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -4958,6 +4958,10 @@ async function generateCheatSheet() {
   document.getElementById('cheat-loading').classList.remove('hidden');
   const cheatDone = startProgress('cheat-progress-bar', 'cheat-progress-pct', 22000);
 
+  // v262: optionaler Wunsch des Studenten (z.B. "nur Grundlagen, zum Auswendiglernen")
+  // steuert Auswahl/Tiefe/Stil – hat Vorrang vor der Standard-Struktur unten.
+  const cheatWish = (document.getElementById('cheat-wish')?.value || '').trim().slice(0, 500);
+
   const prompt = `Erstelle eine präzise, kompakte Zusammenfassung für "${sessionMeta.name}" als Cheat Sheet / Spickzettel.
 
 Struktur:
@@ -4983,7 +4987,11 @@ $$[Formel 1]$$
 ## Typische Fehler ⚠️
 - [Was Schüler häufig falsch machen]
 
-Sei präzise und vollständig. Alle Formeln in LaTeX-Notation.`;
+Sei präzise und vollständig. Alle Formeln in LaTeX-Notation.${cheatWish ? `
+
+WUNSCH DES STUDENTEN (verbindlich, hat VORRANG vor der Standard-Struktur oben):
+${cheatWish}
+Richte Auswahl, Tiefe, Umfang und Stil strikt danach aus. Passe die Abschnitte an den Wunsch an und lasse weg, was ihm widerspricht.` : ''}`;
 
   try {
     document.getElementById('cheat-loading').classList.add('hidden');

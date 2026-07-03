@@ -14,7 +14,7 @@
   <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
   <meta name="theme-color" content="#5856d6" />
   <title>KI-Nachhilfelehrer</title>
-  <link rel="stylesheet" href="style.css?v=261" />
+  <link rel="stylesheet" href="style.css?v=262" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css" crossorigin="anonymous" />
 </head>
 <body>
@@ -586,6 +586,8 @@
           <div class="big-icon">📄</div>
           <h2>Zusammenfassung</h2>
           <p>Ich erstelle eine kompakte Zusammenfassung mit allen wichtigen Konzepten, Formeln und Definitionen – ideal zum Ausdrucken vor der Prüfung.</p>
+          <textarea id="cheat-wish" class="settings-ta cheat-wish" rows="2" maxlength="500"
+            placeholder="Optional: Dein Wunsch – z. B. „nur die Grundlagen, kompakt zum Auswendiglernen“"></textarea>
           <button class="btn-primary" id="cheat-gen-btn">Zusammenfassung erstellen</button>
         </div>
         <div id="cheat-loading" class="cx-state hidden">
@@ -943,7 +945,7 @@
 
 <!-- app.js zuletzt laden: alle Sheets/Elemente müssen im DOM stehen, bevor
      die Top-Level-Handler (z.B. .session-budget-btn) gebunden werden. -->
-<script defer src="app.js?v=261"></script>
+<script defer src="app.js?v=262"></script>
 
 </body>
 </html>
