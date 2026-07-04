@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '262';
+const APP_VERSION = '263';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5213,6 +5213,10 @@ async function generateKarten() {
   showKartenState(document.getElementById('karten-loading'));
   const kartenDone = startProgress('karten-progress-bar', 'karten-progress-pct', 18000);
 
+  // v263: optionaler Wunsch (z.B. "nur die Grundlagen") steuert die Kartenauswahl –
+  // gleiche Mechanik wie das Wunsch-Feld der Zusammenfassung (v262).
+  const kartenWish = (document.getElementById('karten-wish')?.value || '').trim().slice(0, 500);
+
   const prompt = `Erstelle 15 hochwertige Karteikarten aus dem Lernstoff für "${sessionMeta.name}".
 
 Regeln:
@@ -5223,7 +5227,11 @@ Regeln:
 - Formeln in LaTeX ($$...$$)
 
 Antworte NUR als JSON-Array:
-[{"front":"Frage oder Begriff","back":"Vollständige Antwort/Erklärung"},...]`;
+[{"front":"Frage oder Begriff","back":"Vollständige Antwort/Erklärung"},...]${kartenWish ? `
+
+WUNSCH DES STUDENTEN (verbindlich, hat VORRANG bei der Auswahl der Karteninhalte):
+${kartenWish}
+Wähle die Karteninhalte strikt danach aus und lasse weg, was dem Wunsch widerspricht.` : ''}`;
 
   try {
     const raw  = await claudeLocal(
