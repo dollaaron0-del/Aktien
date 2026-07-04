@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '264';
+const APP_VERSION = '265';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5192,12 +5192,25 @@ function showKartenState(el) {
   el.classList.remove('hidden');
 }
 
+// v265: zuletzt generierter Karten-Batch (für "Neue Karten lernen")
+let latestKartenBatch = null;
+
 async function initKarten() {
   const cards = await DB.cards(sessionId);
   const now   = Date.now();
   const due   = cards.filter(c => c.due <= now);
   const stats = document.getElementById('karten-stats');
   const revBtn = document.getElementById('karten-review-btn');
+  const newBtn = document.getElementById('karten-new-btn');
+
+  // v265: fällige Karten des zuletzt generierten Batches separat lernbar –
+  // nach einer Wunsch-Generierung will man gezielt DIE neuen Karten üben,
+  // nicht alle überfälligen. Batch-IDs sind 'b'+Date.now() → String-Vergleich
+  // findet den neuesten.
+  latestKartenBatch = cards.reduce((a, c) => (c.batch && c.batch > a ? c.batch : a), '') || null;
+  const newDue = latestKartenBatch ? due.filter(c => c.batch === latestKartenBatch) : [];
+  newBtn.style.display = newDue.length ? '' : 'none';
+  newBtn.textContent = `🆕 Neue Karten lernen (${newDue.length})`;
 
   if (!cards.length) {
     stats.innerHTML = '<p style="color:var(--text2)">Noch keine Karten. Generiere sie aus deinen Dokumenten.</p>';
@@ -5258,9 +5271,10 @@ Wähle die Karteninhalte strikt danach aus und lasse weg, was dem Wunsch widersp
     if (!Array.isArray(arr)) throw new Error('Keine Karten erkannt');
     const parsed = arr.filter(c => c.front && c.back);
     const existing = await DB.cards(sessionId);
+    const batch = 'b' + Date.now();
     const newCards = parsed.map(c => ({
       front: c.front, back: c.back,
-      interval: 1, ef: 2.5, repetitions: 0, due: Date.now(),
+      interval: 1, ef: 2.5, repetitions: 0, due: Date.now(), batch,
     }));
     await DB.setCards(sessionId, [...existing, ...newCards]);
     kartenDone();
@@ -5272,10 +5286,10 @@ Wähle die Karteninhalte strikt danach aus und lasse weg, was dem Wunsch widersp
   }
 }
 
-async function startReview() {
+async function startReview(onlyBatch) {
   const cards = await DB.cards(sessionId);
   reviewAllCards = cards;
-  reviewQueue = cards.filter(c => c.due <= Date.now());
+  reviewQueue = cards.filter(c => c.due <= Date.now() && (!onlyBatch || c.batch === onlyBatch));
   if (!reviewQueue.length) { await initKarten(); return; }
   reviewIdx   = 0;
   reviewStats = { again: 0, hard: 0, good: 0, easy: 0 };
@@ -5368,7 +5382,10 @@ function endReview() {
 }
 
 document.getElementById('karten-gen-btn')?.addEventListener('click', generateKarten);
-document.getElementById('karten-review-btn')?.addEventListener('click', startReview);
+// Arrow-Wrapper statt Direktbindung: der Click-Event darf nicht als
+// onlyBatch-Argument in startReview landen.
+document.getElementById('karten-review-btn')?.addEventListener('click', () => startReview());
+document.getElementById('karten-new-btn')?.addEventListener('click', () => startReview(latestKartenBatch));
 document.getElementById('karten-done-btn')?.addEventListener('click', initKarten);
 
 // ── Milestone levels (shared between calculateMilestone + renderMilestone) ──
