@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '269';
+const APP_VERSION = '270';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5213,8 +5213,16 @@ function showKartenState(el) {
   el.classList.remove('hidden');
 }
 
-// v265: zuletzt generierter Karten-Batch (für "Neue Karten lernen")
-let latestKartenBatch = null;
+// v270: Batch-Id trägt optional den Generierungs-Wunsch als Set-Namen
+// ('b<ts>|<name>'); ohne Namen fällt das Label auf das Datum zurück.
+function batchLabel(batch) {
+  const sep = batch.indexOf('|');
+  if (sep > 0 && sep < batch.length - 1) return batch.slice(sep + 1);
+  const ts = parseInt(batch.slice(1), 10);
+  return ts > 0
+    ? 'Set vom ' + new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : 'Karten-Set';
+}
 
 async function initKarten() {
   const cards = await DB.cards(sessionId);
@@ -5222,21 +5230,30 @@ async function initKarten() {
   const due   = cards.filter(c => c.due <= now);
   const stats = document.getElementById('karten-stats');
   const revBtn = document.getElementById('karten-review-btn');
-  const newBtn = document.getElementById('karten-new-btn');
 
-  // v265: fällige Karten des zuletzt generierten Batches separat lernbar –
-  // nach einer Wunsch-Generierung will man gezielt DIE neuen Karten üben,
-  // nicht alle überfälligen. Batch-IDs sind 'b'+Date.now() → String-Vergleich
-  // findet den neuesten.
-  latestKartenBatch = cards.reduce((a, c) => (c.batch && c.batch > a ? c.batch : a), '') || null;
-  const newDue   = latestKartenBatch ? due.filter(c => c.batch === latestKartenBatch) : [];
-  const batchAll = latestKartenBatch ? cards.filter(c => c.batch === latestKartenBatch) : [];
-  // v268: Button bleibt auch, wenn nichts aus dem Batch fällig ist – dann als
-  // freie Übungsrunde nur über die zuletzt generierten Karten (Plan bleibt).
-  newBtn.style.display = batchAll.length ? '' : 'none';
-  newBtn.textContent = newDue.length
-    ? `🆕 Neue Karten lernen (${newDue.length})`
-    : `🆕 Neue Karten üben (${batchAll.length})`;
+  // v265: fällige Karten eines generierten Batches separat lernbar.
+  // v270: JEDES Set bleibt anwählbar – vorher zeigte der 🆕-Button nur den
+  // NEUESTEN Batch, ein zweites generiertes Set verdeckte damit das erste.
+  // Pro Batch ein Button (neuestes zuerst); sind Karten des Sets fällig →
+  // echter SRS-Review, sonst freie Übungsrunde über das Set (v268-Verhalten).
+  const batchList = document.getElementById('karten-batch-list');
+  batchList.innerHTML = '';
+  const batches = [...new Set(cards.filter(c => c.batch).map(c => c.batch))].sort().reverse();
+  for (const b of batches) {
+    const inSet = cards.filter(c => c.batch === b);
+    const dueN  = inSet.filter(c => c.due <= now).length;
+    const btn = document.createElement('button');
+    btn.className = 'btn-primary';
+    btn.textContent = dueN
+      ? `🆕 ${batchLabel(b)} – lernen (${dueN})`
+      : `🆕 ${batchLabel(b)} – üben (${inSet.length})`;
+    btn.addEventListener('click', async () => {
+      const cs = await DB.cards(sessionId);
+      const anyDue = cs.some(c => c.batch === b && c.due <= Date.now());
+      if (anyDue) startReview(b); else startPracticeReview(b);
+    });
+    batchList.appendChild(btn);
+  }
 
   // v267: freie Übungsrunde – gelernte (noch nicht fällige) Karten jederzeit
   // wiederholen können, statt auf die SRS-Fälligkeit zu warten.
@@ -5312,7 +5329,11 @@ Wähle die Karteninhalte strikt danach aus und lasse weg, was dem Wunsch widersp
     if (!Array.isArray(arr)) throw new Error('Keine Karten erkannt');
     const parsed = arr.filter(c => c.front && c.back);
     const existing = await DB.cards(sessionId);
-    const batch = 'b' + Date.now();
+    // v270: Wunsch wird zum Set-Namen im Batch-Id ('b<ts>|<name>') – die
+    // Set-Buttons im Karten-Tab zeigen ihn als Label. '|' ist das Trennzeichen
+    // und darf im Namen nicht vorkommen.
+    const setName = kartenWish.replace(/[|\n]/g, ' ').trim().slice(0, 40);
+    const batch = 'b' + Date.now() + (setName ? '|' + setName : '');
     const newCards = parsed.map(c => ({
       front: c.front, back: c.back,
       interval: 1, ef: 2.5, repetitions: 0, due: Date.now(), batch,
@@ -5463,14 +5484,8 @@ document.getElementById('karten-gen-btn')?.addEventListener('click', generateKar
 // Arrow-Wrapper statt Direktbindung: der Click-Event darf nicht als
 // onlyBatch-Argument in startReview landen.
 document.getElementById('karten-review-btn')?.addEventListener('click', () => startReview());
-// v268: fällige Batch-Karten → echter SRS-Review; sonst freie Übungsrunde über
-// den Batch ("generierte Karten nochmal lernen", Wiederholungsplan bleibt).
-document.getElementById('karten-new-btn')?.addEventListener('click', async () => {
-  const cards = await DB.cards(sessionId);
-  const anyDue = cards.some(c => c.batch === latestKartenBatch && c.due <= Date.now());
-  if (anyDue) startReview(latestKartenBatch);
-  else startPracticeReview(latestKartenBatch);
-});
+// v270: die Set-Buttons (ein Button pro Batch) werden in initKarten dynamisch
+// in #karten-batch-list gerendert – Click-Logik dort (fällig → Review, sonst Übung).
 document.getElementById('karten-practice-btn')?.addEventListener('click', () => startPracticeReview());
 document.getElementById('karten-weak-btn')?.addEventListener('click', () => startPracticeReview(null, true));
 document.getElementById('karten-done-btn')?.addEventListener('click', initKarten);

@@ -1131,6 +1131,9 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 #karten-done { align-items: center; text-align: center; gap: 14px; width: 100%; max-width: 480px; }
 
 .karten-stats { width: 100%; }
+/* v270: ein Button pro generiertem Karten-Set; leer → kein Phantom-Gap im Idle-Flex */
+.karten-batch-list { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; max-height: 190px; overflow-y: auto; }
+.karten-batch-list:empty { display: none; }
 .karten-stat-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .kstat {
   background: var(--surface); border-radius: 10px;
