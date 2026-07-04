@@ -844,6 +844,15 @@ async function indexDocument(subjectId, documentId, opts = {}) {
     }
 
     const { chunks, budgetHit } = await structureDocument(rows[0].content, rows[0].filename);
+    // Budget-Abbruch mitten im Dokument: Teil-Chunks NICHT speichern. Der Resume-
+    // Reindex wertet "hat chunks" als "vollständig indexiert" – ein teilgespeichertes
+    // Dokument würde dort übersprungen und bliebe für immer lückenhaft. Solange die
+    // KB nicht 'ready' ist, nutzt der Client ohnehin den Inline-Pfad, die Teil-Chunks
+    // wären also wertlos; der nächste Lauf indexiert das Dokument komplett neu.
+    if (budgetHit) {
+      if (!opts.skipFinalize) await rebuildSubjectKb(subjectId, 'pending');
+      return 'budget';
+    }
     await pool.query('DELETE FROM doc_chunks WHERE document_id=$1', [documentId]);  // alte Version weg
     for (const c of chunks) {
       const emb = await embedText(`${c.topic || ''} ${c.heading || ''} ${c.content || ''}`);
@@ -855,9 +864,8 @@ async function indexDocument(subjectId, documentId, opts = {}) {
          Math.round((c.content || '').length / 4), emb ? JSON.stringify(emb) : null]
       );
     }
-    // budgetHit → 'pending' atomar im rebuild setzen (Doku nur teil-indexiert).
-    if (!opts.skipFinalize) await rebuildSubjectKb(subjectId, budgetHit ? 'pending' : undefined);
-    return budgetHit ? 'budget' : 'ok';
+    if (!opts.skipFinalize) await rebuildSubjectKb(subjectId);
+    return 'ok';
   } catch (e) {
     console.error('indexDocument failed:', e.message);
     if (!opts.skipFinalize) await setKbStatus(subjectId, 'error');
@@ -1126,22 +1134,36 @@ app.get('/api/subjects/:id/kb', async (req, res) => {
 });
 
 // Wissensbasis für ein Fach (neu) aufbauen – auch für vor dem Feature hochgeladene Dokumente.
+// Standard = WIEDERAUFNAHME: Dokumente, die schon chunks haben, gelten als fertig
+// indexiert und werden übersprungen (indexDocument speichert seit dem Teil-Chunk-Fix
+// nur noch komplette Dokumente). Ein Budget-Abbruch kostet so nichts doppelt – vorher
+// löschte jeder Lauf ALLE chunks des Fachs und begann bei null (Marketing: 127 statt
+// ~31 Sonnet-Calls über drei Anläufe). ?full=1 erzwingt den Komplett-Neuaufbau, z.B.
+// nach geändertem Extraktions-Prompt.
 app.post('/api/subjects/:id/kb/reindex', async (req, res) => {
   try {
     const sid = req.params.id;
+    const full = req.query.full === '1' || req.body?.full === true;
     // Budget vorab prüfen → klares Feedback statt stiller, leerer Indexierung.
     const { cost } = await checkDailyLimit();
     if (cost >= await getDailyLimit()) {
       return res.status(429).json({ error: 'Tagesbudget erreicht – Indexierung morgen erneut oder Limit erhöhen.' });
     }
     const docs = (await pool.query('SELECT id FROM documents WHERE subject_id=$1', [sid])).rows;
-    res.json({ started: true, documents: docs.length });   // sofort antworten
+    let todo = docs;
+    if (!full) {
+      const done = new Set((await pool.query(
+        'SELECT DISTINCT document_id FROM doc_chunks WHERE subject_id=$1', [sid]
+      )).rows.map(r => r.document_id));
+      todo = docs.filter(d => !done.has(d.id));
+    }
+    res.json({ started: true, documents: docs.length, skipped: docs.length - todo.length, full });   // sofort antworten
     (async () => {
       try {
-        await pool.query('DELETE FROM doc_chunks WHERE subject_id=$1', [sid]).catch(() => {});
+        if (full) await pool.query('DELETE FROM doc_chunks WHERE subject_id=$1', [sid]).catch(() => {});
         await setKbStatus(sid, 'indexing');
         let budgetHit = false, errorHit = false;
-        for (const d of docs) {
+        for (const d of todo) {
           const st = await indexDocument(sid, d.id, { skipFinalize: true });
           if (st === 'budget') { budgetHit = true; break; }   // Rest bliebe un-indexiert → abbrechen
           if (st === 'error') errorHit = true;                // Doku übersprungen → KB lückenhaft
