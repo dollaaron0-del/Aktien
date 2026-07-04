@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '267';
+const APP_VERSION = '268';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5229,9 +5229,14 @@ async function initKarten() {
   // nicht alle überfälligen. Batch-IDs sind 'b'+Date.now() → String-Vergleich
   // findet den neuesten.
   latestKartenBatch = cards.reduce((a, c) => (c.batch && c.batch > a ? c.batch : a), '') || null;
-  const newDue = latestKartenBatch ? due.filter(c => c.batch === latestKartenBatch) : [];
-  newBtn.style.display = newDue.length ? '' : 'none';
-  newBtn.textContent = `🆕 Neue Karten lernen (${newDue.length})`;
+  const newDue   = latestKartenBatch ? due.filter(c => c.batch === latestKartenBatch) : [];
+  const batchAll = latestKartenBatch ? cards.filter(c => c.batch === latestKartenBatch) : [];
+  // v268: Button bleibt auch, wenn nichts aus dem Batch fällig ist – dann als
+  // freie Übungsrunde nur über die zuletzt generierten Karten (Plan bleibt).
+  newBtn.style.display = batchAll.length ? '' : 'none';
+  newBtn.textContent = newDue.length
+    ? `🆕 Neue Karten lernen (${newDue.length})`
+    : `🆕 Neue Karten üben (${batchAll.length})`;
 
   // v267: freie Übungsrunde – gelernte (noch nicht fällige) Karten jederzeit
   // wiederholen können, statt auf die SRS-Fälligkeit zu warten.
@@ -5331,11 +5336,11 @@ async function startReview(onlyBatch) {
 // Runden-Statistik und die Fokus-Runde; srsUpdate/Persistenz bleiben aus, damit
 // frühes Üben den Wiederholungsplan nicht verschiebt (sonst würde "Einfach"
 // heute die eigentlich fällige Wiederholung um Wochen nach hinten schieben).
-async function startPracticeReview() {
+async function startPracticeReview(onlyBatch) {
   const cards = await DB.cards(sessionId);
-  if (!cards.length) { await initKarten(); return; }
   reviewAllCards = cards;
-  reviewQueue = [...cards];
+  reviewQueue = onlyBatch ? cards.filter(c => c.batch === onlyBatch) : [...cards];
+  if (!reviewQueue.length) { await initKarten(); return; }
   for (let i = reviewQueue.length - 1; i > 0; i--) { // Fisher-Yates
     const j = Math.floor(Math.random() * (i + 1));
     [reviewQueue[i], reviewQueue[j]] = [reviewQueue[j], reviewQueue[i]];
@@ -5440,8 +5445,15 @@ document.getElementById('karten-gen-btn')?.addEventListener('click', generateKar
 // Arrow-Wrapper statt Direktbindung: der Click-Event darf nicht als
 // onlyBatch-Argument in startReview landen.
 document.getElementById('karten-review-btn')?.addEventListener('click', () => startReview());
-document.getElementById('karten-new-btn')?.addEventListener('click', () => startReview(latestKartenBatch));
-document.getElementById('karten-practice-btn')?.addEventListener('click', startPracticeReview);
+// v268: fällige Batch-Karten → echter SRS-Review; sonst freie Übungsrunde über
+// den Batch ("generierte Karten nochmal lernen", Wiederholungsplan bleibt).
+document.getElementById('karten-new-btn')?.addEventListener('click', async () => {
+  const cards = await DB.cards(sessionId);
+  const anyDue = cards.some(c => c.batch === latestKartenBatch && c.due <= Date.now());
+  if (anyDue) startReview(latestKartenBatch);
+  else startPracticeReview(latestKartenBatch);
+});
+document.getElementById('karten-practice-btn')?.addEventListener('click', () => startPracticeReview());
 document.getElementById('karten-done-btn')?.addEventListener('click', initKarten);
 
 // ── Milestone levels (shared between calculateMilestone + renderMilestone) ──
