@@ -1600,14 +1600,14 @@ app.get('/api/subjects/:id/cards', async (req, res) => {
 });
 
 app.post('/api/subjects/:id/cards', async (req, res) => {
-  const { cards } = req.body; // array of {front,back,ef,interval,repetitions,due,batch}
+  const { cards } = req.body; // array of {front,back,ef,interval,repetitions,due,batch,weak}
   if (!Array.isArray(cards)) return res.status(400).json({ error: 'cards array erforderlich' });
   try {
     await pool.query('DELETE FROM flashcards WHERE subject_id=$1', [req.params.id]);
     for (const c of cards) {
       await pool.query(
-        'INSERT INTO flashcards (subject_id,front,back,ef,interval,repetitions,due,batch) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-        [req.params.id, c.front, c.back, c.ef||2.5, c.interval||1, c.repetitions||0, c.due||0, c.batch||null]
+        'INSERT INTO flashcards (subject_id,front,back,ef,interval,repetitions,due,batch,weak) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+        [req.params.id, c.front, c.back, c.ef||2.5, c.interval||1, c.repetitions||0, c.due||0, c.batch||null, c.weak===true]
       );
     }
     res.json({ ok: true });
@@ -1699,7 +1699,7 @@ app.get('/api/backup', authMiddleware, async (req, res) => {
 
     for (const s of subjects) {
       const messages  = (await pool.query('SELECT role,content FROM messages WHERE subject_id=$1 ORDER BY created_at', [s.id])).rows;
-      const cards     = (await pool.query('SELECT front,back,ef,interval,repetitions,due,batch FROM flashcards WHERE subject_id=$1', [s.id])).rows;
+      const cards     = (await pool.query('SELECT front,back,ef,interval,repetitions,due,batch,weak FROM flashcards WHERE subject_id=$1', [s.id])).rows;
       const quiz      = (await pool.query('SELECT score,total FROM quiz_results WHERE subject_id=$1 ORDER BY taken_at', [s.id])).rows;
       const glossar   = (await pool.query('SELECT term,definition FROM glossar WHERE subject_id=$1', [s.id])).rows;
       const cheat     = (await pool.query('SELECT content FROM cheat_sheets WHERE subject_id=$1', [s.id])).rows[0]?.content || null;
@@ -1742,8 +1742,8 @@ app.post('/api/restore', authMiddleware, async (req, res) => {
         await client.query('DELETE FROM flashcards WHERE subject_id=$1', [s.id]);
         for (const c of s.cards) {
           await client.query(
-            'INSERT INTO flashcards (subject_id,front,back,ef,interval,repetitions,due,batch) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-            [s.id, c.front, c.back, c.ef||2.5, c.interval||1, c.repetitions||0, c.due||0, c.batch||null]
+            'INSERT INTO flashcards (subject_id,front,back,ef,interval,repetitions,due,batch,weak) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+            [s.id, c.front, c.back, c.ef||2.5, c.interval||1, c.repetitions||0, c.due||0, c.batch||null, c.weak===true]
           );
         }
       }
@@ -2250,6 +2250,10 @@ async function initTables() {
     // created_at taugt nicht: der Karten-POST macht delete+reinsert und setzt
     // created_at damit bei JEDEM Speichern für alle Karten neu.
     'ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS batch TEXT;',
+    // v269: Wackel-Flag – letzte Bewertung der Karte war "Nochmal"/"Schwer".
+    // "Wacklige Karten üben" filtert danach; Übungsrunden pflegen NUR dieses
+    // Flag (SRS-Felder bleiben unangetastet).
+    'ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS weak BOOLEAN DEFAULT false;',
   ];
   for (const sql of columnMigrations) {
     try {

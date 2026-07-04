@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '268';
+const APP_VERSION = '269';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5244,6 +5244,15 @@ async function initKarten() {
   pracBtn.style.display = cards.length ? '' : 'none';
   pracBtn.textContent = `🔁 Alle Karten üben (${cards.length})`;
 
+  // v269: Wackel-Runde – nur die Karten, deren LETZTE Bewertung "Nochmal"/
+  // "Schwer" war ("die 20 %, die ich noch nicht kann"), isoliert üben,
+  // unabhängig von der SRS-Fälligkeit. Der Pool pflegt sich über das
+  // weak-Flag in jeder Runde selbst (auch Übungsrunden).
+  const weakCards = cards.filter(c => c.weak);
+  const weakBtn = document.getElementById('karten-weak-btn');
+  weakBtn.style.display = weakCards.length ? '' : 'none';
+  weakBtn.textContent = `🎯 Wacklige Karten üben (${weakCards.length})`;
+
   if (!cards.length) {
     stats.innerHTML = '<p style="color:var(--text2)">Noch keine Karten. Generiere sie aus deinen Dokumenten.</p>';
     revBtn.style.display = 'none';
@@ -5336,10 +5345,10 @@ async function startReview(onlyBatch) {
 // Runden-Statistik und die Fokus-Runde; srsUpdate/Persistenz bleiben aus, damit
 // frühes Üben den Wiederholungsplan nicht verschiebt (sonst würde "Einfach"
 // heute die eigentlich fällige Wiederholung um Wochen nach hinten schieben).
-async function startPracticeReview(onlyBatch) {
+async function startPracticeReview(onlyBatch, onlyWeak) {
   const cards = await DB.cards(sessionId);
   reviewAllCards = cards;
-  reviewQueue = onlyBatch ? cards.filter(c => c.batch === onlyBatch) : [...cards];
+  reviewQueue = cards.filter(c => (!onlyBatch || c.batch === onlyBatch) && (!onlyWeak || c.weak));
   if (!reviewQueue.length) { await initKarten(); return; }
   for (let i = reviewQueue.length - 1; i > 0; i--) { // Fisher-Yates
     const j = Math.floor(Math.random() * (i + 1));
@@ -5401,11 +5410,20 @@ document.querySelectorAll('.grade-btn').forEach(btn => {
     // (We cannot re-fetch + match by id: setCards re-inserts all rows and the
     // SERIAL ids change on every save, so id matching would fail after card 1.)
     // v267: in der freien Übungsrunde bleibt der SRS-Plan unangetastet.
+    // v269: das Wackel-Flag pflegt JEDE Runde – letzte Bewertung "Nochmal"/
+    // "Schwer" ⇒ weak. Übungsrunden speichern nur bei Flag-Änderung und
+    // fassen die SRS-Felder dabei nicht an (Plan verschiebt sich nicht).
+    const card = reviewQueue[reviewIdx];
+    const nowWeak = grade <= 1;
     if (!reviewPracticeMode) {
-      srsUpdate(reviewQueue[reviewIdx], grade);
+      card.weak = nowWeak;
+      srsUpdate(card, grade);
+      await DB.setCards(sessionId, reviewAllCards);
+    } else if (!!card.weak !== nowWeak) {
+      card.weak = nowWeak;
       await DB.setCards(sessionId, reviewAllCards);
     }
-    if (grade <= 1) reviewHardCards.push(reviewQueue[reviewIdx]); // "Nochmal"/"Schwer" → nochmal üben
+    if (grade <= 1) reviewHardCards.push(card); // "Nochmal"/"Schwer" → nochmal üben
     touchStreak();
 
     reviewIdx++;
@@ -5454,6 +5472,7 @@ document.getElementById('karten-new-btn')?.addEventListener('click', async () =>
   else startPracticeReview(latestKartenBatch);
 });
 document.getElementById('karten-practice-btn')?.addEventListener('click', () => startPracticeReview());
+document.getElementById('karten-weak-btn')?.addEventListener('click', () => startPracticeReview(null, true));
 document.getElementById('karten-done-btn')?.addEventListener('click', initKarten);
 
 // ── Milestone levels (shared between calculateMilestone + renderMilestone) ──

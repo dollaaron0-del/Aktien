@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS flashcards (
   interval    INT DEFAULT 1,
   repetitions INT DEFAULT 0,
   due         BIGINT DEFAULT 0,
+  batch       TEXT,
+  weak        BOOLEAN DEFAULT false,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
