@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '263';
+const APP_VERSION = '264';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -627,8 +627,13 @@ function jsonWasTruncated(raw) {
 // Versucht, ein abgeschnittenes JSON-Objekt zu reparieren: kürzt vom Ende her,
 // schließt einen offenen String und die offenen {} / [] und parst den längsten
 // Teil, der noch valide ist. Gibt null zurück, wenn nichts zu retten ist.
-function salvageTruncatedJson(raw) {
-  const start = raw.indexOf('{');
+// opener '[' rettet Array-Antworten (Karten/Glossar): das angeschnittene letzte
+// Element fällt weg, alle vollständigen davor bleiben erhalten.
+function salvageTruncatedJson(raw, opener) {
+  // Default im Body statt als `opener = '{'`-Signatur-Default: das Brace im
+  // String-Literal würde den Body-Matcher von scripts/test-pure.js verwirren.
+  opener = opener || '{';
+  const start = raw.indexOf(opener);
   if (start < 0) return null;
   const s = raw.slice(start);
   for (let end = s.length; end > 1; end--) {
@@ -5040,13 +5045,18 @@ Antworte NUR als JSON-Array (maximal 40 Begriffe, alphabetisch sortiert):
 [{"term":"Begriff","def":"Präzise 1-2 Satz Erklärung"},...]`;
 
   try {
+    // v264: gleiche Truncation-Falle wie bei den Karten – 40 Begriffe passen nicht
+    // sicher in 2500 Tokens; Obergrenze hoch + Array-Salvage-Fallback.
     const raw  = await claudeLocal(
       [{ role: 'user', content: 'Alle Fachbegriffe extrahieren.' }],
-      sysBlocks(prompt), 2500,
+      sysBlocks(prompt), 5000,
     );
     const m = raw.match(/\[[\s\S]*\]/);
-    if (!m) throw new Error('Keine Begriffe gefunden');
-    glossarTerms = parseJsonLoose(m[0]).filter(t => t.term && t.def);
+    let arr = null;
+    if (m) { try { arr = parseJsonLoose(m[0]); } catch {} }
+    if (!Array.isArray(arr)) arr = salvageTruncatedJson(raw, '[');
+    if (!Array.isArray(arr)) throw new Error('Keine Begriffe gefunden');
+    glossarTerms = arr.filter(t => t.term && t.def);
     glossarTerms.sort((a, b) => a.term.localeCompare(b.term, 'de'));
     DB.setGlossar(sessionId, glossarTerms.map(t => ({ term: t.term, definition: t.def }))).catch(() => {});
     glossarDone();
@@ -5234,13 +5244,19 @@ ${kartenWish}
 Wähle die Karteninhalte strikt danach aus und lasse weg, was dem Wunsch widerspricht.` : ''}`;
 
   try {
+    // v264: 2500 Tokens schnitten 15 ausführliche Karten ab (stop_reason=max_tokens,
+    // kein schließendes "]") → "Keine Karten erkannt". Obergrenze hoch; kürzere
+    // Antworten kosten nicht mehr. Salvage-Fallback als zweites Netz.
     const raw  = await claudeLocal(
       [{ role: 'user', content: 'Karteikarten erstellen.' }],
-      sysBlocks(prompt), 2500,
+      sysBlocks(prompt), 5000,
     );
     const m = raw.match(/\[[\s\S]*\]/);
-    if (!m) throw new Error('Keine Karten erkannt');
-    const parsed = parseJsonLoose(m[0]).filter(c => c.front && c.back);
+    let arr = null;
+    if (m) { try { arr = parseJsonLoose(m[0]); } catch {} }
+    if (!Array.isArray(arr)) arr = salvageTruncatedJson(raw, '[');
+    if (!Array.isArray(arr)) throw new Error('Keine Karten erkannt');
+    const parsed = arr.filter(c => c.front && c.back);
     const existing = await DB.cards(sessionId);
     const newCards = parsed.map(c => ({
       front: c.front, back: c.back,
