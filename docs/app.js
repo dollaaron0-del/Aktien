@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '266';
+const APP_VERSION = '267';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -5191,6 +5191,7 @@ let reviewAllCards = [];   // full card set; reviewQueue holds references into t
 let reviewIdx     = 0;
 let reviewStats   = { again: 0, hard: 0, good: 0, easy: 0 };
 let reviewHardCards = [];  // in dieser Runde mit "Nochmal"/"Schwer" bewertete Karten (Referenzen)
+let reviewPracticeMode = false; // v267: freie Übungsrunde – bewertet, aber plant nicht um
 
 function srsUpdate(card, grade) {
   if (grade < 2) {
@@ -5232,6 +5233,12 @@ async function initKarten() {
   newBtn.style.display = newDue.length ? '' : 'none';
   newBtn.textContent = `🆕 Neue Karten lernen (${newDue.length})`;
 
+  // v267: freie Übungsrunde – gelernte (noch nicht fällige) Karten jederzeit
+  // wiederholen können, statt auf die SRS-Fälligkeit zu warten.
+  const pracBtn = document.getElementById('karten-practice-btn');
+  pracBtn.style.display = cards.length ? '' : 'none';
+  pracBtn.textContent = `🔁 Alle Karten üben (${cards.length})`;
+
   if (!cards.length) {
     stats.innerHTML = '<p style="color:var(--text2)">Noch keine Karten. Generiere sie aus deinen Dokumenten.</p>';
     revBtn.style.display = 'none';
@@ -5264,13 +5271,13 @@ async function generateKarten() {
 
 Regeln:
 - Vorderseite: präzise Frage oder Begriff (max 2 Zeilen)
-- Rückseite: vollständige Antwort/Erklärung mit dem Kerninhalt (2–4 Sätze)
+- Rückseite: ZUERST die Kernaussage in EINER kurzen, fettgedruckten Markdown-Zeile (**...**) – die Antwort auf einen Blick. Danach eine Leerzeile, dann 1–3 Sätze ausführlichere Erklärung/Begründung. Nicht länger als nötig.
 - Mix aus: Begriffsdefinitionen, Konzeptfragen, Formelanwendungen, Zusammenhängen
 - Keine trivialen Fragen; echtes Verständnis prüfen
 - Formeln in LaTeX ($$...$$)
 
 Antworte NUR als JSON-Array:
-[{"front":"Frage oder Begriff","back":"Vollständige Antwort/Erklärung"},...]${kartenWish ? `
+[{"front":"Frage oder Begriff","back":"**Kurze Kernaussage.**\\n\\nAusführlichere Erklärung in 1–3 Sätzen."},...]${kartenWish ? `
 
 WUNSCH DES STUDENTEN (verbindlich, hat VORRANG bei der Auswahl der Karteninhalte):
 ${kartenWish}
@@ -5311,9 +5318,33 @@ async function startReview(onlyBatch) {
   reviewAllCards = cards;
   reviewQueue = cards.filter(c => c.due <= Date.now() && (!onlyBatch || c.batch === onlyBatch));
   if (!reviewQueue.length) { await initKarten(); return; }
+  reviewPracticeMode = false;
   reviewIdx   = 0;
   reviewStats = { again: 0, hard: 0, good: 0, easy: 0 };
   reviewHardCards = [];
+  showKartenState(document.getElementById('karten-review'));
+  showCard();
+}
+
+// v267: freie Übungsrunde über ALLE Karten (gemischt) – gelernte Karten nochmal
+// lernen, ohne auf die Fälligkeit zu warten. Bewertungen zählen nur für die
+// Runden-Statistik und die Fokus-Runde; srsUpdate/Persistenz bleiben aus, damit
+// frühes Üben den Wiederholungsplan nicht verschiebt (sonst würde "Einfach"
+// heute die eigentlich fällige Wiederholung um Wochen nach hinten schieben).
+async function startPracticeReview() {
+  const cards = await DB.cards(sessionId);
+  if (!cards.length) { await initKarten(); return; }
+  reviewAllCards = cards;
+  reviewQueue = [...cards];
+  for (let i = reviewQueue.length - 1; i > 0; i--) { // Fisher-Yates
+    const j = Math.floor(Math.random() * (i + 1));
+    [reviewQueue[i], reviewQueue[j]] = [reviewQueue[j], reviewQueue[i]];
+  }
+  reviewPracticeMode = true;
+  reviewIdx   = 0;
+  reviewStats = { again: 0, hard: 0, good: 0, easy: 0 };
+  reviewHardCards = [];
+  haptic(10);
   showKartenState(document.getElementById('karten-review'));
   showCard();
 }
@@ -5364,9 +5395,12 @@ document.querySelectorAll('.grade-btn').forEach(btn => {
     // so mutating the queued card also updates the full set we persist.
     // (We cannot re-fetch + match by id: setCards re-inserts all rows and the
     // SERIAL ids change on every save, so id matching would fail after card 1.)
-    srsUpdate(reviewQueue[reviewIdx], grade);
+    // v267: in der freien Übungsrunde bleibt der SRS-Plan unangetastet.
+    if (!reviewPracticeMode) {
+      srsUpdate(reviewQueue[reviewIdx], grade);
+      await DB.setCards(sessionId, reviewAllCards);
+    }
     if (grade <= 1) reviewHardCards.push(reviewQueue[reviewIdx]); // "Nochmal"/"Schwer" → nochmal üben
-    await DB.setCards(sessionId, reviewAllCards);
     touchStreak();
 
     reviewIdx++;
@@ -5394,6 +5428,7 @@ function endReview() {
       <span class="done-stat">😵 Nochmal: ${reviewStats.again}</span>
     </div>
     <div class="done-pct" style="color:${pct>=70?'var(--green)':pct>=50?'var(--yellow)':'var(--red)'}">${pct}% gewusst</div>
+    ${reviewPracticeMode ? '<p style="color:var(--text2);font-size:13px;margin-top:6px">🔁 Übungsrunde – dein Wiederholungsplan bleibt unverändert.</p>' : ''}
     ${hardN ? `<button class="btn-primary btn-sm karten-hard-again" id="karten-hard-btn">💪 ${hardN} schwere Karte${hardN === 1 ? '' : 'n'} nochmal</button>` : ''}`;
   document.getElementById('karten-hard-btn')?.addEventListener('click', startHardReview);
   showKartenState(document.getElementById('karten-done'));
@@ -5406,6 +5441,7 @@ document.getElementById('karten-gen-btn')?.addEventListener('click', generateKar
 // onlyBatch-Argument in startReview landen.
 document.getElementById('karten-review-btn')?.addEventListener('click', () => startReview());
 document.getElementById('karten-new-btn')?.addEventListener('click', () => startReview(latestKartenBatch));
+document.getElementById('karten-practice-btn')?.addEventListener('click', startPracticeReview);
 document.getElementById('karten-done-btn')?.addEventListener('click', initKarten);
 
 // ── Milestone levels (shared between calculateMilestone + renderMilestone) ──

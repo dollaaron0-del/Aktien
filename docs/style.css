@@ -1145,19 +1145,27 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 /* Card flip animation */
 .card-scene { width: 100%; perspective: 1200px; }
 .card-flip {
-  width: 100%; min-height: 200px; position: relative;
+  width: 100%; height: clamp(240px, 46vh, 440px); position: relative;
   transform-style: preserve-3d;
   transition: transform .45s cubic-bezier(.4,0,.2,1);
 }
 .card-flip.flipped { transform: rotateY(180deg); }
+/* Feste Höhe + interner Scroll: die absolut positionierten Faces tragen nichts zur
+   Container-Höhe bei; ohne definierte Höhe wuchs eine lange Antwort aus dem
+   200px-Container heraus und überlagerte Umdrehen-/Bewertungs-Buttons darunter.
+   Jetzt reserviert .card-flip feste Höhe, die Antwort scrollt IM Kärtchen. */
 .card-face {
-  position: absolute; width: 100%; min-height: 200px;
+  position: absolute; width: 100%; height: 100%;
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
   background: var(--surface); border-radius: 18px; box-shadow: var(--shadow);
-  display: flex; flex-direction: column; justify-content: center;
-  padding: 28px 22px; font-size: 17px; line-height: 1.6; text-align: center;
+  display: flex; flex-direction: column; justify-content: safe center;
+  padding: 34px 22px 24px; font-size: 17px; line-height: 1.6; text-align: center;
+  overflow-y: auto; overscroll-behavior: contain;
 }
-.card-back { transform: rotateY(180deg); }
+/* Antwort oben beginnen (fette Kernaussage zuerst), damit sie sofort sichtbar ist
+   und bei langem Text nach unten weggescrollt wird statt mittig abgeschnitten. */
+.card-back { transform: rotateY(180deg); justify-content: flex-start; }
+.card-back > :first-child { margin-top: 0; }
 .card-face::before {
   position: absolute; top: 13px; left: 16px;
   font-size: 10px; font-weight: 700; letter-spacing: .7px; opacity: .5;

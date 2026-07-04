@@ -1801,7 +1801,7 @@ async function autoGenerateCards(subjectId, filename, content) {
   const truncated = content.slice(0, 8000);
   const text = await localComplete([{
     role: 'user',
-    content: `Erstelle 12 Lernkarten (Frage/Antwort) aus diesem Text. Antworte NUR als JSON-Array ohne Erklärung:\n[{"front":"Frage?","back":"Antwort."},...]\n\nText:\n${truncated}`,
+    content: `Erstelle 12 Lernkarten (Frage/Antwort) aus diesem Text. Jede "back" beginnt mit der Kernaussage in EINER kurzen fettgedruckten Markdown-Zeile (**...**), dann eine Leerzeile, dann 1–3 Sätze Erklärung. Antworte NUR als JSON-Array ohne weiteren Text:\n[{"front":"Frage?","back":"**Kernaussage.**\\n\\nErklärung in 1–3 Sätzen."},...]\n\nText:\n${truncated}`,
   }], 2000);
   const m = text.match(/\[[\s\S]*\]/);
   if (!m) return;
