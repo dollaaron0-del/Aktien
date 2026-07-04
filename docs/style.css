@@ -596,9 +596,19 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 }
 
 @media print {
-  .app-header, .mode-tabs, .exam-toolbar, .btn-primary, .btn-secondary { display: none !important; }
+  .app-header, .mode-tabs, .exam-toolbar, .btn-primary, .btn-secondary,
+  .subpanel-nav, .cheat-toolbar, .settings-ta { display: none !important; }
   .exam-body { box-shadow: none; padding: 0; }
   .answers-hidden .ans-section { display: block !important; }
+  /* v266: Drucken zeigte nur ~1,5 Seiten. Die App ist ein 100dvh-Layout mit
+     overflow:hidden auf html/body/.panel und scrollenden Innencontainern –
+     der Druck sah nur den gerade sichtbaren Ausschnitt. Für den Druck die
+     ganze Kette auf natürliche Höhe entklemmen, damit der Inhalt paginiert. */
+  html, body { height: auto !important; overflow: visible !important; }
+  .screen.active { height: auto !important; position: static !important; }
+  .panel { overflow: visible !important; }
+  .subpanel, .cheat-content, .exam-content, .aufgaben-content,
+  .glossar-list, #glossar-result { overflow: visible !important; flex: none !important; height: auto !important; }
 }
 
 /* ── Dark Mode ───────────────────────────────────────────────────────────── */

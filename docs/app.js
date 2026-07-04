@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '265';
+const APP_VERSION = '266';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -3003,6 +3003,7 @@ function restoreKlausur(k) {
   } else {
     body.innerHTML = safeHtml(md(k.content));
   }
+  renderMermaidIn(body);
   examAnsVis = false;
   body.closest('.exam-content').classList.add('answers-hidden');
   document.getElementById('exam-ans-btn').textContent = 'Lösungen anzeigen';
@@ -3068,6 +3069,7 @@ ${diffInstructions[selDiff] || diffInstructions.mittel}${curriculum}
     } else {
       body.innerHTML = safeHtml(md(exam));
     }
+    renderMermaidIn(body);
     body.closest('.exam-content').classList.add('answers-hidden');
     document.getElementById('exam-ans-btn').textContent = 'Lösungen anzeigen';
     examDone();
@@ -3245,6 +3247,7 @@ Format:
       </div>
       <div class="gauge-meta">${questions.length} Quiz-Fragen · ${ls.active}/${ls.total} Lernpfad-Themen · Quiz ${quizRaw ?? '–'}% / Lern ${lernRaw ?? '–'}% → ${percent}% · Ziel: ${targetScore}%</div>`;
     document.getElementById('analysis-body').innerHTML = safeHtml(md(analysis));
+    renderMermaidIn(document.getElementById('analysis-body'));
     renderSparkline();
     renderProgressChart();
     analysisDone();
@@ -3353,9 +3356,18 @@ function addMsg(container, role, text, rephraseCallback) {
   }
   container.appendChild(w);
   container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-  const mermaidEls = w.querySelectorAll('.mermaid');
-  if (mermaidEls.length) mermaid.run({ nodes: mermaidEls });
+  renderMermaidIn(w);
   return w;
+}
+
+// v266: Mermaid-Blöcke nachrendern. md() erzeugt <div class="mermaid">Code</div>,
+// aber nur der Chat (addMsg) rief mermaid.run – überall sonst (Zusammenfassung,
+// Klausur, Aufgaben, Analyse, Feedback) blieb der rohe Diagramm-Code als Text
+// stehen, obwohl der System-Prompt Mermaid ausdrücklich anbietet.
+function renderMermaidIn(el) {
+  if (!el || !window.mermaid) return;
+  const nodes = el.querySelectorAll('.mermaid:not([data-processed])');
+  if (nodes.length) mermaid.run({ nodes }).catch(() => {});
 }
 
 function addTyping(container) {
@@ -3606,6 +3618,7 @@ function restoreAufgabe(entry) {
   } else {
     body.innerHTML = safeHtml(md(entry.fullResult));
   }
+  renderMermaidIn(body);
   injectSolveButtons(entry.tasksPart);
   document.getElementById('aufgaben-rechnen-btn').onclick = () => sendToRechnen(entry.tasksPart.trim());
   body.closest('.aufgaben-content').classList.add('answers-hidden');
@@ -3771,6 +3784,7 @@ Format:
     } else {
       body.innerHTML = safeHtml(md(result));
     }
+    renderMermaidIn(body);
 
     // Inject per-task "✏️ Lösen" buttons
     injectSolveButtons(tasksPart);
@@ -4553,6 +4567,7 @@ Beantworte kurz und präzise. Gib einen hilfreichen Hinweis – keine vollständ
   try {
     const answer = await claudeLocalKb([{ role: 'user', content: question }], extra, 400, question);
     aiBubble.innerHTML = safeHtml(md(answer));
+    renderMermaidIn(aiBubble);
   } catch (e) {
     aiBubble.textContent = '⚠️ ' + e.message;
   }
@@ -4753,6 +4768,7 @@ async function checkHandwriting() {
   const sig = rechnenSolutionSig(writtenText, taskText);
   if (rechnenLastFeedback && sig === rechnenLastCheckSig) {
     document.getElementById('rechnen-feedback-content').innerHTML = safeHtml(md(rechnenLastFeedback));
+    renderMermaidIn(document.getElementById('rechnen-feedback-content'));
     document.getElementById('rechnen-sheet-loading').classList.add('hidden');
     document.getElementById('rechnen-sheet-result').classList.remove('hidden');
     checkDone();
@@ -4879,6 +4895,7 @@ Falls die Schrift schwer lesbar ist: gib trotzdem dein Bestes und erkläre was d
     rechnenAttempts++;           // Zähler für die Eskalations-Bremse beim nächsten Re-Check
     rechnenLastCheckSig = sig;   // (A) Stand merken, damit ein unveränderter Re-Check gratis ist
     document.getElementById('rechnen-feedback-content').innerHTML = safeHtml(md(full));
+    renderMermaidIn(document.getElementById('rechnen-feedback-content'));
     document.getElementById('rechnen-sheet-loading').classList.add('hidden');
     document.getElementById('rechnen-sheet-result').classList.remove('hidden');
   } catch (e) {
@@ -5009,6 +5026,8 @@ Richte Auswahl, Tiefe, Umfang und Stil strikt danach aus. Passe die Abschnitte a
       (text) => { body.innerHTML = safeHtml(md(text)); },
     );
     cheatDone();
+    // erst nach Stream-Ende: auf halben Blöcken würde mermaid.run nur Fehler werfen
+    renderMermaidIn(body);
     currentCheatText = result;
     api(`/api/subjects/${sessionId}/cheat`, {
       method: 'POST',
@@ -5089,6 +5108,7 @@ async function loadSavedCheat() {
     if (!data?.content) return;
     currentCheatText = data.content;
     document.getElementById('cheat-body').innerHTML = safeHtml(md(data.content));
+    renderMermaidIn(document.getElementById('cheat-body'));
     document.getElementById('cheat-idle').classList.add('hidden');
     document.getElementById('cheat-loading').classList.add('hidden');
     document.getElementById('cheat-result').classList.remove('hidden');
@@ -7888,7 +7908,7 @@ async function lernenQaSend() {
     );
     lernenQaMsgs.push({ role: 'assistant', content: reply });
     aEl.innerHTML = safeHtml(md(reply));
-    if (window.mermaid) mermaid.run({ nodes: aEl.querySelectorAll('.mermaid') }).catch(() => {});
+    renderMermaidIn(aEl);
   } catch (e) { aEl.textContent = '⚠️ ' + e.message; }
   msgs.scrollTop = msgs.scrollHeight;
 }
