@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '270';
+const APP_VERSION = '272';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -3035,10 +3035,29 @@ Zeitdruck: kompakter und dichter als normal.`,
     ? `\n\nDECKE GENAU DIESE THEMEN AB (das ist der Lernpfad des/der Studierenden – stelle KEINE Fragen zu Themen außerhalb dieser Liste, aber decke die Breite ab):\n${moduleStructure.kapitel.map(k => `- ${k.titel}: ${k.themen.join(', ')}`).join('\n')}`
     : '';
 
-  const examPrompt = `Erstelle eine Probeklausur für "${sessionMeta.name}".
-${diffInstructions[selDiff] || diffInstructions.mittel}${curriculum}
+  // Stil-Vorlage (v272): generateExam schickte die hochgeladenen Probe-/Alt-
+  // klausuren NIE mit – examDocContext wird nur im Lern-Tab benutzt, und der
+  // KB-Pfad injiziert nur ~12 semantische Chunks zur Query "<Fachname>" (fast
+  // immer Skript-Material). "Prüfungsnah" verlangte Stil-Treue zu Dokumenten,
+  // die das Modell nie sah; zusätzlich überschrieb das starre Teil-A/B/C-Schema
+  // unten jede echte Klausurform. Jetzt: klausur/altklausur-Docs (OHNE Übungs-
+  // blätter – die verwässern das Format) inline als Vorlage, das generische
+  // Schema gilt nur noch, wenn keine Vorlagen existieren.
+  const examStyle = (await loadExamDocContext(sessionId, ['klausur', 'altklausur'])).slice(0, 15000);
 
+  const formatBlock = examStyle
+    ? `\n--- STIL-VORLAGEN (hochgeladene Probe-/Altklausuren) ---\n${examStyle}\n--- ENDE STIL-VORLAGEN ---
+
+FORMAT: Bilde Aufbau, Aufgabentypen, Aufgabenanzahl, Punkteverteilung und Formulierungsstil der Stil-Vorlagen so genau wie möglich nach – NICHT das generische Schema "Multiple Choice / Kurzantworten". Übernimm keine Aufgabe wörtlich: andere Zahlen, Fälle und Schwerpunkte, aber dieselbe Form und derselbe Anspruch.
+
+Beginne mit:
 # Probeklausur – ${sessionMeta.name}
+**Bearbeitungszeit:** XX Min | **Punkte:** XX
+
+Ganz am Ende, durch eine Zeile "---" getrennt, zwingend:
+## Lösungsschlüssel
+[Vollständige Lösungen zu allen Aufgaben]`
+    : `\n# Probeklausur – ${sessionMeta.name}
 **Bearbeitungszeit:** XX Min | **Punkte:** XX
 
 ## Teil A – Multiple Choice (je 1 Punkt)
@@ -3054,8 +3073,12 @@ ${diffInstructions[selDiff] || diffInstructions.mittel}${curriculum}
 ## Lösungsschlüssel
 [Vollständige Lösungen]`;
 
+  const examPrompt = `Erstelle eine Probeklausur für "${sessionMeta.name}".
+${diffInstructions[selDiff] || diffInstructions.mittel}${curriculum}
+${formatBlock}`;
+
   try {
-    const exam = await claudeLocalKb([{ role: 'user', content: 'Klausur erstellen.' }], examPrompt, 3000, sessionMeta.name, { kbK: 12 });
+    const exam = await claudeLocalKb([{ role: 'user', content: 'Klausur erstellen.' }], examPrompt, examStyle ? 3500 : 3000, sessionMeta.name, { kbK: 12 });
     currentExamText = exam;
     api(`/api/subjects/${sessionId}/klausuren`, {
       method: 'POST',
@@ -6775,14 +6798,14 @@ function lernenCacheKey() {
   return `lc3_${sessionId}_${unitId(curUnit())}_${diff}`;
 }
 
-async function loadExamDocContext(subjId) {
-  const examTypes = new Set(['klausur', 'altklausur', 'uebungsblatt']);
+async function loadExamDocContext(subjId, types = ['klausur', 'altklausur', 'uebungsblatt']) {
+  const examTypes = new Set(types);
   const docLabel = d => {
     const found = DOC_TYPES.find(t => t.value === (d.doc_type || d.docType));
     return found ? found.label : (d.doc_type || d.docType || '');
   };
   try {
-    const docs = await api(`/api/subjects/${subjId}/documents/typed?types=klausur,altklausur,uebungsblatt`);
+    const docs = await api(`/api/subjects/${subjId}/documents/typed?types=${types.join(',')}`);
     if (docs && docs.length) {
       return docs.map(d => `[${docLabel(d)}: ${d.filename}]\n${d.content}`).join('\n\n---\n\n');
     }
