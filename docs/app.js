@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '272';
+const APP_VERSION = '273';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -3028,13 +3028,6 @@ Kombiniere mehrere Konzepte pro Aufgabe, teste Grenzfälle und Ausnahmen, verlan
 Zeitdruck: kompakter und dichter als normal.`,
   };
 
-  // Klausur an den Lernpfad koppeln: genau die Themen abfragen, die der/die
-  // Studierende im Lern-Bereich durcharbeitet → die Lernaufgaben "zahlen" sichtbar
-  // auf die Klausur ein, keine fremden/lückenhaften Fragen.
-  const curriculum = moduleStructure?.kapitel?.length
-    ? `\n\nDECKE GENAU DIESE THEMEN AB (das ist der Lernpfad des/der Studierenden – stelle KEINE Fragen zu Themen außerhalb dieser Liste, aber decke die Breite ab):\n${moduleStructure.kapitel.map(k => `- ${k.titel}: ${k.themen.join(', ')}`).join('\n')}`
-    : '';
-
   // Stil-Vorlage (v272): generateExam schickte die hochgeladenen Probe-/Alt-
   // klausuren NIE mit – examDocContext wird nur im Lern-Tab benutzt, und der
   // KB-Pfad injiziert nur ~12 semantische Chunks zur Query "<Fachname>" (fast
@@ -3045,10 +3038,24 @@ Zeitdruck: kompakter und dichter als normal.`,
   // Schema gilt nur noch, wenn keine Vorlagen existieren.
   const examStyle = (await loadExamDocContext(sessionId, ['klausur', 'altklausur'])).slice(0, 15000);
 
+  // Klausur an den Lernpfad koppeln: nur Themen abfragen, die der/die Studierende
+  // im Lern-Bereich durcharbeitet. MIT Stil-Vorlagen ist die Liste aber nur der
+  // erlaubte POOL – echte Klausuren (z.B. Marketing: 3 Aufgaben à 20 min) prüfen
+  // eine kleine AUSWAHL, nicht die Breite. "decke die Breite ab" zwang das Modell
+  // vorher, alle ~44 Themen hineinzupressen → aufgeblähte 120-min-Klausuren trotz
+  // 60-min-Vorlage.
+  const curriculum = moduleStructure?.kapitel?.length
+    ? (examStyle
+      ? `\n\nTHEMEN-POOL (Lernpfad des/der Studierenden – stelle KEINE Fragen zu Themen außerhalb dieser Liste):\n${moduleStructure.kapitel.map(k => `- ${k.titel}: ${k.themen.join(', ')}`).join('\n')}\n\nWICHTIG: Presse NICHT alle Themen in die Klausur. Wähle wie in den Stil-Vorlagen eine kleine AUSWAHL von Themenbereichen (so viele Schwerpunkte, wie EINE Vorlagen-Klausur Aufgaben hat) und prüfe diese vertieft. Wähle bei jeder neuen Klausur eine andere Themen-Kombination aus dem Pool.`
+      : `\n\nDECKE GENAU DIESE THEMEN AB (das ist der Lernpfad des/der Studierenden – stelle KEINE Fragen zu Themen außerhalb dieser Liste, aber decke die Breite ab):\n${moduleStructure.kapitel.map(k => `- ${k.titel}: ${k.themen.join(', ')}`).join('\n')}`)
+    : '';
+
   const formatBlock = examStyle
     ? `\n--- STIL-VORLAGEN (hochgeladene Probe-/Altklausuren) ---\n${examStyle}\n--- ENDE STIL-VORLAGEN ---
 
 FORMAT: Bilde Aufbau, Aufgabentypen, Aufgabenanzahl, Punkteverteilung und Formulierungsstil der Stil-Vorlagen so genau wie möglich nach – NICHT das generische Schema "Multiple Choice / Kurzantworten". Übernimm keine Aufgabe wörtlich: andere Zahlen, Fälle und Schwerpunkte, aber dieselbe Form und derselbe Anspruch.
+Enthält eine Vorlagen-Datei MEHRERE Klausuren (z.B. "Übungsklausur 1/2/3"), entspricht deine Probeklausur EINER einzelnen davon – in Aufgabenanzahl, Bearbeitungszeit und Punktsumme. Niemals den Umfang mehrerer Vorlagen-Klausuren addieren.
+Übernimm Bearbeitungszeit und Gesamtpunktzahl exakt aus der Vorlage; steht die Zeit dort nur pro Aufgabe, summiere sie über die Aufgaben EINER Klausur.
 
 Beginne mit:
 # Probeklausur – ${sessionMeta.name}
