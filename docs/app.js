@@ -4,7 +4,7 @@
 // #app-version-Label geschrieben → zeigt, welcher app.js wirklich geladen ist
 // (statt eines fest verdrahteten, veraltenden Texts in index.html). Bei jedem
 // Asset-Bump hier UND in index.html (?v=) UND in sw.js erhöhen.
-const APP_VERSION = '273';
+const APP_VERSION = '275';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('app-version');
   if (!el) return;
@@ -2344,11 +2344,20 @@ async function sendChat() {
     // Sonst Hebel-1-Verhalten: große Fächer per RAG, Vertiefungsfragen mit vollen Doks.
     const kbHaiku  = isKbChatHaiku();
     const fullDocs = !kbHaiku && chatWantsFullDocs(text);
+    // Fragt der Student nach einem Standard-Koordinatenmodell (IS-LM, Angebot/
+    // Nachfrage, Phillips, Indifferenz), liefere dasselbe geprüfte, ausgerichtete
+    // SVG-Gerüst wie im Lern-Tab (scaffoldOnly: kein Freihand-Fallback im Chat).
+    const graphik = buildGraphikBlock(text, { scaffoldOnly: true, placement: 'FRÜH in deiner Antwort' });
     const reply = await claude(sessionMeta.chatHistory, sysBlocks(
       'Erkläre mit echtem Verständnis – nicht nur Definitionen. Nutze Beispiele aus dem echten Leben, Analogien und erkläre den Hintergrund. ' +
-      'Wenn etwas unklar wirkt, gehe tiefer. Wenn sinnvoll, stelle am Ende eine Denkfrage um das Verständnis zu festigen.',
+      'Wenn etwas unklar wirkt, gehe tiefer. Wenn sinnvoll, stelle am Ende eine Denkfrage um das Verständnis zu festigen.' + graphik,
       { omitDocs: !fullDocs }
-    ), 1500, { noRag: fullDocs, kbChat: kbHaiku });
+    // Basis-Budget 2800: der Prompt verlangt ausführliche Erklärungen mit
+    // Beispielen/Analogien + Abschlussfrage – 1500 schnitt die Antwort real
+    // mitten im Satz ab. SVG ist zusätzlich token-schwer (~300–400 Tok), daher
+    // bei Pflicht-Grafik nochmal Luft obendrauf (Server capt ohnehin bei 4096).
+    // max_tokens ist nur eine Obergrenze → kein Mehrpreis, nur real erzeugte Tokens zählen.
+    ), graphik ? 3600 : 2800, { noRag: fullDocs, kbChat: kbHaiku });
     sessionMeta.chatHistory.push({ role: 'assistant', content: reply });
     DB.addMessage(sessionId, 'assistant', reply);
     if (sessionMeta.chatHistory.length > 20) {
@@ -5045,6 +5054,12 @@ WUNSCH DES STUDENTEN (verbindlich, hat VORRANG vor der Standard-Struktur oben):
 ${cheatWish}
 Richte Auswahl, Tiefe, Umfang und Stil strikt danach aus. Passe die Abschnitte an den Wunsch an und lasse weg, was ihm widerspricht.` : ''}`;
 
+  // Zielt der Wunsch (bzw. das Fach) auf ein Standard-Koordinatenmodell, hänge das
+  // geprüfte SVG-Gerüst an – scaffoldOnly, damit ein allgemeiner Spickzettel nicht
+  // ungefragt mit einem Freihand-Diagramm zugestellt wird.
+  const graphik = buildGraphikBlock(cheatWish || sessionMeta.name || '',
+    { scaffoldOnly: true, placement: 'im passenden Abschnitt (z.B. bei den Kernkonzepten)' });
+
   try {
     document.getElementById('cheat-loading').classList.add('hidden');
     document.getElementById('cheat-result').classList.remove('hidden');
@@ -5052,7 +5067,8 @@ Richte Auswahl, Tiefe, Umfang und Stil strikt danach aus. Passe die Abschnitte a
     body.innerHTML = '';
     const result = await claudeLocalStream(
       [{ role: 'user', content: 'Zusammenfassung erstellen.' }],
-      sysBlocks(prompt), 3000,
+      // Bei Pflicht-Grafik mehr Budget (SVG frisst Tokens), sonst reicht 3000.
+      sysBlocks(prompt + graphik), graphik ? 3800 : 3000,
       (text) => { body.innerHTML = safeHtml(md(text)); },
     );
     cheatDone();
@@ -6920,12 +6936,20 @@ function pickDiagramScaffold(query) {
 // Grafik-Anweisung für den Erklärungs-Prompt: entweder ein geprüftes Vorlage-
 // Gerüst (Standard-Modell erkannt) ODER strenge Koordinaten-Regeln als Fallback.
 // Immer inkl. Text↔Grafik-Kopplung + Pflicht zur Verschiebungs-Erklärung.
-function buildGraphikBlock(query) {
+// opts.placement: WOHIN das SVG gehört (Lern-Tab hat ein JSON-Feld "was", Chat/
+// Zusammenfassung geben Markdown aus → andere Formulierung).
+// opts.scaffoldOnly: NUR die geprüften Gerüste liefern, sonst '' zurückgeben.
+// Für Chat/Zusammenfassung gedacht – dort liefe der generische Freihand-Fallback
+// sonst bei JEDER Anfrage mit und würde das Modell zu verschobenen Ad-hoc-SVGs
+// verleiten (genau das v247-Problem); nur ein echter Modell-Treffer soll dort greifen.
+function buildGraphikBlock(query, opts = {}) {
+  const placement = opts.placement || 'FRÜH im Feld "was"';
   const koppel = `\n- TEXT ↔ GRAFIK (verbindlich, wenn eine Grafik vorhanden ist): Der Begleittext MUSS das Diagramm ABLESEN und DEUTEN, nicht nur erwähnen – benenne den markierten Punkt und was er bedeutet ("Punkt A markiert das Gleichgewicht (Y*, i*)"). Bei Modellen mit Verschiebung MUSST du erklären, WAS die Kurve verschiebt UND die Bewegung zum NEUEN Gleichgewicht in Worten nachzeichnen ("steigt die Staatsnachfrage G, verschiebt sich die IS-Kurve nach rechts zu IS'; das Gleichgewicht wandert von A nach B – Einkommen Y und Zins i steigen"). Der Text trägt die Deutung/das Warum, die Grafik die räumlichen Beziehungen – nicht doppelt beschreiben.`;
   const scaf = pickDiagramScaffold(query);
   if (scaf) {
-    return `\n- PFLICHT-GRAFIK (${scaf.name}): Übernimm GENAU dieses geprüfte, bereits exakt ausgerichtete SVG-Gerüst UNVERÄNDERT in den Koordinaten (Schnittpunkt, Achsen-Ticks und Verschiebung passen millimetergenau). Ändere NUR Farben/Beschriftungstexte, falls die Vorlesungsnotation abweicht – verschiebe NIEMALS Koordinaten und erfinde KEINE eigenen. Platziere das SVG FRÜH im Feld "was". ${scaf.hint}\nSVG-GERÜST:\n${scaf.svg}${koppel}`;
+    return `\n- PFLICHT-GRAFIK (${scaf.name}): Übernimm GENAU dieses geprüfte, bereits exakt ausgerichtete SVG-Gerüst UNVERÄNDERT in den Koordinaten (Schnittpunkt, Achsen-Ticks und Verschiebung passen millimetergenau). Ändere NUR Farben/Beschriftungstexte, falls die Vorlesungsnotation abweicht – verschiebe NIEMALS Koordinaten und erfinde KEINE eigenen. Platziere das SVG ${placement}. ${scaf.hint}\nSVG-GERÜST:\n${scaf.svg}${koppel}`;
   }
+  if (opts.scaffoldOnly) return '';
   return `\n- GRAFIK (nur wenn das Thema ein Standard-Koordinatenmodell besitzt, z.B. Funktionsgraph, Kräfte-/Phasendiagramm): Zeichne EIN kompaktes Inline-SVG (viewBox '0 0 320 260'). REGELN für exakte Ausrichtung – strikt befolgen: (1) Zeichne Kurven als GERADE <line>, nicht als Bézier – nur so ist der Schnittpunkt berechenbar. (2) Bestimme den Schnittpunkt der beiden Geraden ALGEBRAISCH und setze den Punkt, die gestrichelten Projektionslinien UND die Achsen-Ticks (z.B. i*, Y*) auf GENAU diese Koordinaten – kein Augenmaß. (3) Achsen bei x=45 (senkrecht) und y=215 (waagerecht); ALLE Beschriftungen müssen innerhalb x∈[45,305] und y∈[25,215] bleiben; Labels nahe dem rechten Rand mit text-anchor='end'; setze KEIN Textlabel auf eine Linie. (4) Ausschließlich EINFACHE Anführungszeichen im SVG (viewBox='…'), niemals doppelte. (5) Wenn das Modell eine Verschiebung kennt: zweite, gestrichelte Kurve + kleiner Pfeil + neues Gleichgewicht.${koppel}`;
 }
 

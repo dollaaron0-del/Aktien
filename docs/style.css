@@ -25,16 +25,15 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Palm-Rejection app-weit: Der Handballen darf beim Schreiben mit dem Stift
-   NIRGENDS Text markieren. Der globale selectstart-Guard greift zu spät, wenn
-   die Handfläche vor dem Stift aufsetzt – darum ist Text grundsätzlich nicht
-   markierbar, nur echte Eingabefelder bleiben editierbar/markierbar. */
-body {
+/* Text ist app-weit markierbar (Studenten wollen Erklärungen/Antworten kopieren).
+   Palm-Rejection greift nur dort, wo mit dem Stift geschrieben wird: der JS-
+   selectstart-Guard blockt Selektion WÄHREND des Zeichnens, aber die Handfläche
+   kann VOR dem Stift aufsetzen (Guard greift zu spät) – darum sind zusätzlich die
+   beiden Zeichenflächen selbst grundsätzlich nicht markierbar. Nur DIESE Bereiche,
+   nicht der ganze body, sonst lässt sich nirgends Text kopieren. */
+#canvas-scroll-wrap, #lernen-canvas-wrap {
   -webkit-user-select: none; user-select: none;
   -webkit-touch-callout: none;
-}
-input, textarea, [contenteditable="true"], [contenteditable=""] {
-  -webkit-user-select: text; user-select: text;
 }
 
 .screen { display: none; width: 100%; height: 100dvh; position: absolute; inset: 0; flex-direction: column; }
