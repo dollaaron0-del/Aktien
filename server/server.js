@@ -746,9 +746,88 @@ Gib AUSSCHLIESSLICH ein JSON-Objekt zurück – kein Text davor oder danach:
 REGELN: Nur Inhalte aus dem Auszug, KEIN Allgemeinwissen, nichts hinzudichten. Formeln in LaTeX.
 Zerlege nach inhaltlichen Einheiten (nicht nach Seiten). Jeder chunk muss FÜR SICH verständlich sein (max ~250 Wörter). Antworte auf Deutsch.`;
 
+// ── Lokaler, kostenfreier Chunker (kein Sonnet) ─────────────────────────────
+// Standardweg der Indexierung: zerlegt Rohtext rein strukturell (Überschriften +
+// Absatzgrenzen) in ~250-Wort-Häppchen und embeddet sie lokal (nomic). Kostet 0 €
+// und 0 Cloud-Calls. Rohe Skript-Auszüge sind fürs Grounding sogar treuer als eine
+// Modell-Zusammenfassung (kein Halluzinations-Risiko wie beim OCR-Vorfall 04.07.).
+// Der Sonnet-Pfad (structureDocument) bleibt per USE_LOCAL_KB_INDEX=false erreichbar.
+const USE_LOCAL_KB_INDEX = process.env.USE_LOCAL_KB_INDEX !== 'false';
+
+function guessChunkKind(t) {
+  if (/\$|\\frac|\\sum|\\int|∑|∫|≤|≥|=\s*[-\d(]/.test(t)) return 'formel';
+  if (/\b(z\.?\s?b\.?|beispielsweise|zum beispiel|beispiel:)/i.test(t)) return 'beispiel';
+  if (/\b(definition|ist definiert|bezeichnet man|versteht man unter|nennt man)\b/i.test(t)) return 'definition';
+  if ((t.match(/\?/g) || []).length >= 2) return 'pruefungsfrage';
+  return 'konzept';
+}
+
+// Konservative Überschriftserkennung: lieber eine Überschrift verpassen als einen
+// Fließtext-Satz fälschlich als topic labeln (Retrieval hängt eh am content-Embedding).
+function looksLikeHeading(line) {
+  const t = line.trim();
+  if (!t || t.length > 90) return false;
+  if (/^#{1,6}\s+\S/.test(t)) return true;                                            // Markdown
+  if (/^(kapitel|abschnitt|teil|thema|lektion|einheit|übung|aufgabe|gliederung)\b/i.test(t)) return true;
+  if (/^\d+(\.\d+){0,3}[.)]?\s+\S/.test(t) && !/[.!?]$/.test(t)) return true;           // "1.2 Titel"
+  if (t.length <= 70 && /^[A-ZÄÖÜ]/.test(t) && !/[.!?:,;]$/.test(t) && t.split(/\s+/).length <= 9) return true;
+  return false;
+}
+function cleanHeading(h) {
+  return h.replace(/^#{1,6}\s*/, '').replace(/^\d+(\.\d+)*[.)]?\s*/, '').trim().slice(0, 80);
+}
+
+// Formgleich zu structureDocument, aber ohne API. topic = nächste Überschrift (sonst
+// Dateiname), heading = kurzer Titel, kind heuristisch.
+function structureDocumentLocal(content, filename) {
+  const baseTopic = (filename || '').replace(/\.[^.]+$/, '').replace(/[_\-]+/g, ' ').trim() || 'Unterlagen';
+  const MIN = 300, MAX = 1400;
+  // NFKC faltet die "Mathematical Alphanumeric Symbols" der PDF-Textebene (𝐻→H,
+  // 𝐸→E, 𝑋→X) zurück auf ASCII. Ohne das enthielten ~45% der QM3-Chunks
+  // unlesbare Glyphen (𝐻𝐻 0 statt H0), die nomic mies tokenisiert → schlechtes
+  // Retrieval. Deterministisch, kostenlos; putzt nebenbei Ligaturen/Sonderformen.
+  // (Der Sonnet-Pfad normalisierte das früher implizit mit; hier machen wir es explizit.)
+  const lines = (content || '').normalize('NFKC').split(/\r?\n/);
+  const chunks = [];
+  let heading = '', buf = '';
+
+  const emit = (text, hd) => {
+    text = text.trim();
+    if (text.length < 40) return;                                    // Rausch-Fragment
+    const title = hd || text.split(/(?<=[.!?])\s/)[0].split(/\s+/).slice(0, 8).join(' ');
+    chunks.push({
+      kind: guessChunkKind(text),
+      topic: hd || baseTopic,
+      heading: (title || baseTopic).slice(0, 80),
+      content: text,
+      source_ref: filename + (hd ? ` – ${hd}` : ''),
+    });
+  };
+  const flushBuf = () => {
+    let rest = buf.trim(); buf = '';
+    while (rest.length > MAX) {
+      let cut = rest.lastIndexOf('\n\n', MAX);                       // bevorzugt Absatzgrenze
+      if (cut < MIN) cut = rest.slice(0, MAX).lastIndexOf('. ') + 1; // sonst Satzgrenze
+      if (cut < MIN) cut = rest.lastIndexOf('\n', MAX);
+      if (cut < MIN) cut = MAX;                                      // im Notfall harter Schnitt
+      emit(rest.slice(0, cut), heading);
+      rest = rest.slice(cut).trim();
+    }
+    if (rest) emit(rest, heading);
+  };
+
+  for (const line of lines) {
+    if (looksLikeHeading(line)) { flushBuf(); heading = cleanHeading(line); continue; }
+    buf += (buf ? '\n' : '') + line;
+  }
+  flushBuf();
+  return { chunks, truncated: 0, budgetHit: false };
+}
+
 // Ein Dokument per Sonnet in chunks zerlegen (große Dokumente in Fenstern).
 // Rückgabe: { chunks, truncated, budgetHit } – truncated = Anzahl geborgener
 // (abgeschnittener) Fenster, budgetHit = Abbruch wegen Tagesbudget.
+// Nur noch aktiv bei USE_LOCAL_KB_INDEX=false; sonst greift structureDocumentLocal.
 async function structureDocument(content, filename) {
   const WINDOW = 24000, MAX_WINDOWS = 8;   // Kostendeckel für sehr große Dokumente
   const windows = [];
@@ -830,9 +909,12 @@ async function rebuildSubjectKb(subjectId, forceStatus) {
 // ab und markiert die KB als unvollständig statt fälschlich 'ready'.
 async function indexDocument(subjectId, documentId, opts = {}) {
   try {
-    // Budget-Schutz: bei erschöpftem Tagesbudget nicht teuer indexieren – später per Reindex.
-    const { cost } = await checkDailyLimit();
-    if (cost >= await getDailyLimit()) { if (!opts.skipFinalize) await setKbStatus(subjectId, 'pending'); return 'budget'; }
+    // Budget-Schutz nur im Sonnet-Modus: der lokale Chunker kostet nichts, also auch
+    // bei erschöpftem Tagesbudget indexieren (Embeddings laufen lokal über Ollama).
+    if (!USE_LOCAL_KB_INDEX) {
+      const { cost } = await checkDailyLimit();
+      if (cost >= await getDailyLimit()) { if (!opts.skipFinalize) await setKbStatus(subjectId, 'pending'); return 'budget'; }
+    }
 
     if (!opts.skipFinalize) await setKbStatus(subjectId, 'indexing');
     const { rows } = await pool.query(
@@ -843,7 +925,9 @@ async function indexDocument(subjectId, documentId, opts = {}) {
       return 'ok';
     }
 
-    const { chunks, budgetHit } = await structureDocument(rows[0].content, rows[0].filename);
+    const { chunks, budgetHit } = USE_LOCAL_KB_INDEX
+      ? structureDocumentLocal(rows[0].content, rows[0].filename)
+      : await structureDocument(rows[0].content, rows[0].filename);
     // Budget-Abbruch mitten im Dokument: Teil-Chunks NICHT speichern. Der Resume-
     // Reindex wertet "hat chunks" als "vollständig indexiert" – ein teilgespeichertes
     // Dokument würde dort übersprungen und bliebe für immer lückenhaft. Solange die
@@ -1145,9 +1229,12 @@ app.post('/api/subjects/:id/kb/reindex', async (req, res) => {
     const sid = req.params.id;
     const full = req.query.full === '1' || req.body?.full === true;
     // Budget vorab prüfen → klares Feedback statt stiller, leerer Indexierung.
-    const { cost } = await checkDailyLimit();
-    if (cost >= await getDailyLimit()) {
-      return res.status(429).json({ error: 'Tagesbudget erreicht – Indexierung morgen erneut oder Limit erhöhen.' });
+    // Nur im Sonnet-Modus relevant; der lokale Chunker kostet nichts.
+    if (!USE_LOCAL_KB_INDEX) {
+      const { cost } = await checkDailyLimit();
+      if (cost >= await getDailyLimit()) {
+        return res.status(429).json({ error: 'Tagesbudget erreicht – Indexierung morgen erneut oder Limit erhöhen.' });
+      }
     }
     const docs = (await pool.query('SELECT id FROM documents WHERE subject_id=$1', [sid])).rows;
     let todo = docs;

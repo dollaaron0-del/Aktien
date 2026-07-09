@@ -6,6 +6,6 @@
     "start": "cd server && node server.js",
     "dev": "cd server && node --watch server.js",
     "lint": "node scripts/lint-api-usage.js",
-    "test": "node scripts/test-pure.js"
+    "test": "node scripts/test-pure.js && node scripts/test-chunker.js"
   }
 }
